@@ -398,7 +398,10 @@ async function processInboxMessage(
   if (labels.includes("SENT") && !labels.includes("INBOX")) {
     return { messageId, skipped: "sent-only", subject: parsed.subject };
   }
-  // Do NOT require INBOX — Gmail category tabs / filters often omit it on history rows.
+  // Respect Gmail filters that Skip Inbox: only triage mail that landed in Inbox.
+  if (!labels.includes("INBOX")) {
+    return { messageId, skipped: "not-in-inbox", subject: parsed.subject };
+  }
   const textBody = `${parsed.subject || ""}\n${parsed.body || ""}`;
   const twofa = detect2fa(textBody);
   const shipping = detectShipping(textBody);

@@ -183,9 +183,12 @@ export async function drainHistory(
         const labels = m.labelIds || [];
         if (labels.includes("SENT") && !labels.includes("INBOX")) {
           sentIds.push(mid);
+        } else if (labels.length > 0 && !labels.includes("INBOX")) {
+          // Filter Skip-Inbox / label-only adds — do not triage.
+          continue;
         } else {
-          // Include INBOX, unlabeled, and category/custom-label-only rows.
-          // processInboxMessage drops trash/spam/sent-only after full fetch.
+          // INBOX present, or empty labelIds (history often incomplete) —
+          // processInboxMessage requires INBOX on the full message.
           inboxIds.push(mid);
         }
       }
