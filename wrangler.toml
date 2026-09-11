@@ -9,9 +9,10 @@ binding = "AI"
 binding = "INBOX_STATE"
 id = "5a936f0100db491ea09910443abb564c"
 
-# Renew Gmail users.watch (~7 day expiry) once daily at 14:00 UTC.
+# 0 14 * * *  — renew Gmail users.watch (~7 day expiry), 14:00 UTC / 07:00 PT
+# 20 */4 * * * — reconcile: catch-up history drain for all mailboxes
 [triggers]
-crons = ["0 14 * * *"]
+crons = ["0 14 * * *", "20 */4 * * *"]
 
 # Bake-off 4 models (16 Hermes/inbox fixtures): glm-5.3-flash 16/16 labels+JSON;
 # llama fp8 14/16; gpt-oss-20b 14/16; glm-4.7-flash 12/16 (slow). Flip back if needed.

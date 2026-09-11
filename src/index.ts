@@ -973,14 +973,56 @@ async function handleClassifyCompare(request: Request, env: Env): Promise<Respon
   });
 }
 
+
+/** Catch-up drain for every registered mailbox (missed Pub/Sub / partial drains). */
+async function reconcileAllMailboxes(env: Env): Promise<{
+  ok: boolean;
+  results: Record<string, unknown>[];
+}> {
+  if (env.INBOX_STATE) await migrateLegacyIfNeeded(env.INBOX_STATE);
+  const boxes = env.INBOX_STATE ? await listMailboxes(env.INBOX_STATE) : [];
+  if (!boxes.length) {
+    return { ok: false, results: [{ ok: false, error: "no mailboxes" }] };
+  }
+  const results: Record<string, unknown>[] = [];
+  for (const email of boxes) {
+    try {
+      results.push(await drainOneMailbox(env, email, null));
+    } catch (err) {
+      results.push({
+        ok: false,
+        email,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return { ok: results.every((r) => r.ok), results };
+}
+
 export default {
   async scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: Env,
     _ctx: ExecutionContext,
   ): Promise<void> {
-    const result = await renewAllWatches(env);
-    console.log("cron renew-watches", JSON.stringify(result));
+    const cron = controller.cron || "";
+    // Daily watch renew
+    if (cron === "0 14 * * *") {
+      const result = await renewAllWatches(env);
+      console.log("cron renew-watches", JSON.stringify(result));
+      return;
+    }
+    // Periodic reconcile (and any unknown cron → reconcile as safe default)
+    const result = await reconcileAllMailboxes(env);
+    console.log("cron reconcile", cron, JSON.stringify({
+      ok: result.ok,
+      mailboxes: result.results.map((r) => ({
+        email: r.email,
+        ok: r.ok,
+        inbox: r.inbox,
+        error: r.error,
+      })),
+    }));
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -1006,6 +1048,7 @@ export default {
           "POST /drain",
           "POST /watch",
           "POST /cron/renew-watches",
+          "POST /cron/reconcile",
           ...(debugEnabled(env)
             ? ["POST /debug/classify-compare", "POST /debug/history", "POST /spike", "POST /suite"]
             : []),
@@ -1015,7 +1058,7 @@ export default {
         debug: debugEnabled(env),
         mailboxes: boxes,
         watch_expiration: watchMeta,
-        cron: "0 14 * * *",
+        crons: ["0 14 * * *", "20 */4 * * *"],
         fixtures: Object.keys(FIXTURES),
       });
     }
@@ -1049,9 +1092,17 @@ export default {
     }
 
     if (request.method === "POST" && pathname === "/cron/renew-watches") {
-      // Spike debug route — same logic as scheduled cron.
       try {
         const result = await renewAllWatches(env);
+        return json(result, result.ok ? 200 : 500);
+      } catch (err) {
+        return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
+      }
+    }
+
+    if (request.method === "POST" && pathname === "/cron/reconcile") {
+      try {
+        const result = await reconcileAllMailboxes(env);
         return json(result, result.ok ? 200 : 500);
       } catch (err) {
         return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
