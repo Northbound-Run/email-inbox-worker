@@ -298,18 +298,9 @@ function discoverWorkerBaseUrl(deployOut = "") {
     return url;
   }
 
-  // whoami email → rough subdomain guess (e.g. matthew@hall.vc → matthewhall-ca style is unreliable)
-  const who = runCapture("npx", ["wrangler", "whoami"]);
-  const email = (who.out.match(/associated with the email\s+(\S+)/i) || [])[1];
-  if (email && name) {
-    const local = email.split("@")[0].replace(/[^a-z0-9]/gi, "").toLowerCase();
-    if (local) {
-      const guess = `https://${name}.${local}.workers.dev`;
-      console.log(`⚠ Could not confirm subdomain via API; guessed ${guess}`);
-      return guess;
-    }
-  }
-
+  // Do not guess subdomain from whoami email — that mapping is unreliable.
+  // Fall through to an interactive prompt in resolveWorkerBaseUrl.
+  console.log("⚠ Could not auto-detect workers.dev URL (no deploy URL / subdomain API).");
   return null;
 }
 
