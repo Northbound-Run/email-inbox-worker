@@ -10,7 +10,7 @@ Cloudflare Worker companion for the **Email** Grok Bot (Hermes-style inbox organ
 Prereqs: Node 20+, [gcloud](https://cloud.google.com/sdk/docs/install) (`gcloud auth login`), Cloudflare account (Wrangler will open a browser login if needed).
 
 ```bash
-git clone git@github.com:MatthewHallCom/email-inbox-worker.git
+git clone git@github.com:Northbound-Run/email-inbox-worker.git
 cd email-inbox-worker
 npm install
 npm run setup
