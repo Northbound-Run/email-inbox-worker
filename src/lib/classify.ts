@@ -438,7 +438,7 @@ export async function classifyMail(
     OWNER_EMAIL?: string;
   },
   pre: "Marketing" | "Notification" | null,
-  ownerEmail = "matthall28@gmail.com",
+  ownerEmail = "",
 ): Promise<ClassifyResult> {
   if (pre) {
     return {
@@ -465,7 +465,7 @@ export async function classifyMail(
   if (fallbackModel && fallbackModel !== primary) models.push(fallbackModel);
 
   // Prefer the mailbox being classified (multi-account). OWNER_EMAIL is only a default.
-  const owner = (ownerEmail || "").trim() || env.OWNER_EMAIL?.trim() || "matthall28@gmail.com";
+  const owner = (ownerEmail || "").trim() || env.OWNER_EMAIL?.trim() || "";
   const userContent = buildClassifyUserContent(parsed, owner);
   let lastErr: unknown;
 

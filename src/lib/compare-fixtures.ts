@@ -11,7 +11,7 @@ export type CompareFixture = {
   notes?: string;
 };
 
-const OWNER = "matthall28@gmail.com";
+const OWNER = "owner@example.com";
 
 /** Subset (~14) covering To Respond / FYI / Marketing / Notification / Meeting. */
 export const COMPARE_FIXTURES: CompareFixture[] = [

@@ -17,8 +17,8 @@ crons = ["0 14 * * *", "20 */4 * * *"]
 # Bake-off 4 models (16 Hermes/inbox fixtures): glm-5.3-flash 16/16 labels+JSON;
 # llama fp8 14/16; gpt-oss-20b 14/16; glm-4.7-flash 12/16 (slow). Flip back if needed.
 [vars]
-OWNER_EMAIL = "matthall28@gmail.com"
-WORK_EMAIL = "matt@northbound.run"
+# Set OWNER_EMAIL / WORK_EMAIL via `wrangler secret put` (or dashboard) per deploy.
+# Do not commit real addresses.
 CLASSIFIER_MODEL = "@cf/zai-org/glm-5.3-flash"
 
 # Secrets:

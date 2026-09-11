@@ -87,7 +87,7 @@ const FIXTURES: Record<string, ScenarioPayload> = {
   classify_to_respond: {
     scenario: "classify",
     from: "Alex Kim <alex@example.com>",
-    to: "matthall28@gmail.com",
+    to: "owner@example.com",
     subject: "Quick question on the customs demo",
     body: "Hey Matthew — can you send me the latest Northbound deck before Thursday? Thanks, Alex",
   },
@@ -95,14 +95,14 @@ const FIXTURES: Record<string, ScenarioPayload> = {
     scenario: "classify",
     from: "Jordan Lee <jordan@partner.com>",
     to: "sam@partner.com",
-    cc: "matthall28@gmail.com",
+    cc: "owner@example.com",
     subject: "Need Sam to approve the invoice",
     body: "Sam — please approve invoice #4412 today. Matthew is only CC'd for visibility.",
   },
   classify_marketing: {
     scenario: "classify",
     from: "Deals <noreply@retail.example>",
-    to: "matthall28@gmail.com",
+    to: "owner@example.com",
     subject: "48-hour flash sale — 40% off",
     body: "Shop now. Click here to unsubscribe from future emails.",
     list_unsubscribe: true,
@@ -194,7 +194,7 @@ async function handleTriage(request: Request, env: Env): Promise<Response> {
   const text = `${parsed.subject}\n${parsed.body}`;
   const twofa = detect2fa(text);
   const shipping = detectShipping(text);
-  const ownerEmail = String(body.ownerEmail || body.owner || env.OWNER_EMAIL || "matthall28@gmail.com");
+  const ownerEmail = String(body.ownerEmail || body.owner || env.OWNER_EMAIL || "");
   const role = recipientRole(parsed, ownerEmail);
   let pre = preClassify(parsed);
   // Hermes recipient_role: owner only in Cc → FYI without LLM (and never wake Email)
@@ -607,7 +607,7 @@ async function handleDrain(request: Request, env: Env): Promise<Response> {
       if (!resolved.token) {
         return json({ ok: false, error: "no mailboxes; visit /oauth/start" }, 400);
       }
-      const email = resolved.email || env.OWNER_EMAIL?.trim() || "matthall28@gmail.com";
+      const email = resolved.email || env.OWNER_EMAIL?.trim() || "";
       const one = await drainOneMailbox(env, email, body.startHistoryId || null);
       return json(one, one.ok ? 200 : one.stale ? 409 : 500);
     }
@@ -907,7 +907,7 @@ async function handleClassifyCompare(request: Request, env: Env): Promise<Respon
       ? body.fixtures
       : COMPARE_FIXTURES;
   const ownerDefault =
-    body.ownerEmail?.trim() || env.OWNER_EMAIL?.trim() || "matthall28@gmail.com";
+    body.ownerEmail?.trim() || env.OWNER_EMAIL?.trim() || "";
 
   const results: Array<Record<string, unknown>> = [];
   for (const fix of fixtures) {
