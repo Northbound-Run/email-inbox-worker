@@ -458,7 +458,8 @@ export async function classifyMail(
 
   const model = env.CLASSIFIER_MODEL?.trim() || DEFAULT_CLASSIFIER_MODEL;
 
-  const owner = env.OWNER_EMAIL?.trim() || ownerEmail;
+  // Prefer the mailbox being classified (multi-account). OWNER_EMAIL is only a default.
+  const owner = (ownerEmail || "").trim() || env.OWNER_EMAIL?.trim() || "matthall28@gmail.com";
   const userContent = buildClassifyUserContent(parsed, owner);
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
