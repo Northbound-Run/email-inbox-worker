@@ -52,6 +52,11 @@ npm run setup -- \
 
 `--worker-url` is optional when auto-detect succeeds.
 
+## Cost (Cloudflare)
+
+Rough monthly estimate for Workers + KV + Workers AI: see [docs/COST.md](docs/COST.md).  
+Typical 1–2 mailboxes with default `glm-5.3-flash`: about **$5–10/mo** (mostly the Workers Paid $5 base).
+
 ## Architecture
 
 | Layer | Owns |
