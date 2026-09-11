@@ -136,7 +136,20 @@ export const COMPARE_FIXTURES: CompareFixture[] = [
       body: "Your pull request was merged. Manage preferences: https://github.com/settings/notifications",
     },
   },
-  {
+    {
+    id: "felix_renewal_notification",
+    expected: "Notification",
+    ownerEmail: OWNER,
+    notes: "2026-09-11 mis-wake: notify.* host + in-app counselling/ship CTAs, not email reply",
+    mail: {
+      from: "felix@notify.felixforyou.ca",
+      to: OWNER,
+      subject: "Your renewal is approved!",
+      body:
+        "Do you need medication counselling? Your renewal is approved. Before we send your order, would you like to speak to a pharmacist about your medication? No, just ship my order. Yes, have a pharmacist call me. Note: If we don't hear back from you in 24 hours, we'll ship your order.",
+    },
+  },
+{
     id: "stripe_receipt_notification",
     expected: "Notification",
     ownerEmail: OWNER,
