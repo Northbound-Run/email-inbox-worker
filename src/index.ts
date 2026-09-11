@@ -69,6 +69,8 @@ export interface Env {
   OWNER_EMAIL?: string;
   WORK_EMAIL?: string;
   ALLOW_INSECURE_PUSH?: string;
+  /** Set to "1" to enable /debug/* routes (classify-compare, history). */
+  ALLOW_DEBUG?: string;
   PUBLIC_PUSH_URL?: string;
   // Gmail OAuth (multi-mailbox; refresh tokens live in KV)
   GOOGLE_CLIENT_ID?: string;
@@ -133,6 +135,11 @@ function json(data: unknown, status = 200): Response {
     headers: { "content-type": "application/json; charset=utf-8" },
   });
 }
+
+function debugEnabled(env: Env): boolean {
+  return env.ALLOW_DEBUG === "1";
+}
+
 
 function asParsed(body: ScenarioPayload): ParsedMail {
   return {
@@ -999,12 +1006,13 @@ export default {
           "POST /drain",
           "POST /watch",
           "POST /cron/renew-watches",
-          "POST /debug/classify-compare",
-          "POST /spike",
-          "POST /spike/:fixture",
-          "POST /suite",
+          ...(debugEnabled(env)
+            ? ["POST /debug/classify-compare", "POST /debug/history", "POST /spike", "POST /suite"]
+            : []),
         ],
         classifier_model: env.CLASSIFIER_MODEL || DEFAULT_CLASSIFIER_MODEL,
+        classifier_fallback: DEFAULT_CLASSIFIER_MODEL,
+        debug: debugEnabled(env),
         mailboxes: boxes,
         watch_expiration: watchMeta,
         cron: "0 14 * * *",
@@ -1050,16 +1058,21 @@ export default {
       }
     }
 
-    if (request.method === "POST" && pathname === "/debug/history") {
-      return handleDebugHistory(request, env);
-    }
-
-    if (request.method === "POST" && pathname === "/debug/classify-compare") {
-      try {
-        return await handleClassifyCompare(request, env);
-      } catch (err) {
-        return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
+    if (pathname.startsWith("/debug/")) {
+      if (!debugEnabled(env)) {
+        return json({ ok: false, error: "debug disabled (set ALLOW_DEBUG=1)" }, 404);
       }
+      if (request.method === "POST" && pathname === "/debug/history") {
+        return handleDebugHistory(request, env);
+      }
+      if (request.method === "POST" && pathname === "/debug/classify-compare") {
+        try {
+          return await handleClassifyCompare(request, env);
+        } catch (err) {
+          return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+      }
+      return json({ ok: false, error: "not found" }, 404);
     }
 
     if (request.method === "GET" && pathname === "/fixtures") {

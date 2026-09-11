@@ -52,6 +52,8 @@ export type ClassifyResult = {
   directed_at_owner: boolean;
   reason: string;
   source: "preclassify" | "llm" | "fallback";
+  /** Model that produced the LLM result (when source=llm). */
+  model?: string;
 };
 
 export function buildClassifyUserContent(
@@ -456,52 +458,67 @@ export async function classifyMail(
     };
   }
 
-  const model = env.CLASSIFIER_MODEL?.trim() || DEFAULT_CLASSIFIER_MODEL;
+  const primary =
+    env.CLASSIFIER_MODEL?.trim() || GLM_CLASSIFIER_MODEL || DEFAULT_CLASSIFIER_MODEL;
+  const fallbackModel = DEFAULT_CLASSIFIER_MODEL;
+  const models = [primary];
+  if (fallbackModel && fallbackModel !== primary) models.push(fallbackModel);
 
   // Prefer the mailbox being classified (multi-account). OWNER_EMAIL is only a default.
   const owner = (ownerEmail || "").trim() || env.OWNER_EMAIL?.trim() || "matthall28@gmail.com";
   const userContent = buildClassifyUserContent(parsed, owner);
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
+
+  async function runModel(model: string): Promise<ClassifyResult> {
+    let result: unknown;
     try {
-      let result: unknown;
+      result = await env.AI!.run(model, {
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: userContent },
+        ],
+        max_tokens: 400,
+        temperature: 0,
+        response_format: {
+          type: "json_schema",
+          json_schema: CLASSIFY_JSON_SCHEMA,
+        },
+      });
+    } catch {
+      result = await env.AI!.run(model, {
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: userContent },
+        ],
+        max_tokens: 400,
+        temperature: 0,
+      });
+    }
+    const text = contentFromAiResult(result);
+    const obj = extractJsonObject(text);
+    let category = coerceCategory(String(obj.category || "FYI"));
+    let directed = Boolean(obj.directed_at_owner);
+    let reason = String(obj.reason || "workers-ai");
+    if (model !== primary) {
+      reason = `${reason}; model-fallback:${model}`;
+    }
+    const guarded = applyOwnerGuards(parsed, owner, category, directed, reason);
+    return {
+      category: guarded.category,
+      directed_at_owner: guarded.directed,
+      reason,
+      source: "llm",
+      model,
+    };
+  }
+
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        result = await env.AI.run(model, {
-          messages: [
-            { role: "system", content: SYSTEM },
-            { role: "user", content: userContent },
-          ],
-          max_tokens: 400,
-          temperature: 0,
-          response_format: {
-            type: "json_schema",
-            json_schema: CLASSIFY_JSON_SCHEMA,
-          },
-        });
-      } catch {
-        result = await env.AI.run(model, {
-          messages: [
-            { role: "system", content: SYSTEM },
-            { role: "user", content: userContent },
-          ],
-          max_tokens: 400,
-          temperature: 0,
-        });
+        return await runModel(model);
+      } catch (err) {
+        lastErr = err;
       }
-      const text = contentFromAiResult(result);
-      const obj = extractJsonObject(text);
-      let category = coerceCategory(String(obj.category || "FYI"));
-      let directed = Boolean(obj.directed_at_owner);
-      const reason = String(obj.reason || "workers-ai");
-      const guarded = applyOwnerGuards(parsed, owner, category, directed, reason);
-      return {
-        category: guarded.category,
-        directed_at_owner: guarded.directed,
-        reason,
-        source: "llm",
-      };
-    } catch (err) {
-      lastErr = err;
     }
   }
   return fallbackOnAiFailure(parsed, owner, lastErr);

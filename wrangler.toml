@@ -25,5 +25,5 @@ CLASSIFIER_MODEL = "@cf/zai-org/glm-5.3-flash"
 #   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GMAIL_REFRESH_TOKEN (optional legacy)
 #   GMAIL_PUBSUB_TOPIC (projects/ID/topics/NAME)
 #   PUBLIC_PUSH_URL (https://…/pubsub) — OIDC audience
-# Optional: OWNER_EMAIL, WORK_EMAIL, ALLOW_INSECURE_PUSH=1
+# Optional: OWNER_EMAIL, WORK_EMAIL, ALLOW_INSECURE_PUSH=1, ALLOW_DEBUG=1
 # CLASSIFIER_MODEL is set above; override via secret if desired.
