@@ -1,0 +1,29 @@
+name = "email-webhook-spike"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "INBOX_STATE"
+id = "5a936f0100db491ea09910443abb564c"
+
+# Renew Gmail users.watch (~7 day expiry) once daily at 14:00 UTC.
+[triggers]
+crons = ["0 14 * * *"]
+
+# Bake-off 4 models (16 Hermes/inbox fixtures): glm-5.3-flash 16/16 labels+JSON;
+# llama fp8 14/16; gpt-oss-20b 14/16; glm-4.7-flash 12/16 (slow). Flip back if needed.
+[vars]
+OWNER_EMAIL = "matthall28@gmail.com"
+WORK_EMAIL = "matt@northbound.run"
+CLASSIFIER_MODEL = "@cf/zai-org/glm-5.3-flash"
+
+# Secrets:
+#   GROK_WEBHOOK_URL, GROK_WEBHOOK_KEY
+#   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GMAIL_REFRESH_TOKEN (optional legacy)
+#   GMAIL_PUBSUB_TOPIC (projects/ID/topics/NAME)
+#   PUBLIC_PUSH_URL (https://…/pubsub) — OIDC audience
+# Optional: OWNER_EMAIL, WORK_EMAIL, ALLOW_INSECURE_PUSH=1
+# CLASSIFIER_MODEL is set above; override via secret if desired.

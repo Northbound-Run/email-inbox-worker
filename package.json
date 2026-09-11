@@ -1,0 +1,21 @@
+{
+  "name": "email-inbox-worker",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cloudflare Worker companion for Grok Bot Email: Gmail Pub/Sub triage + draft wakes",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "spike": "wrangler dev --test-scheduled=false",
+    "setup": "node scripts/setup.mjs",
+    "setup:watch": "node scripts/setup.mjs --watch-only"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250906.0",
+    "typescript": "^5.9.2",
+    "wrangler": "^3.114.15"
+  },
+  "bin": {
+    "email-inbox-setup": "scripts/setup.mjs"
+  }
+}

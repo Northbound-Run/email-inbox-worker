@@ -1,0 +1,23 @@
+# Dependencies / build
+node_modules/
+dist/
+.wrangler/
+
+# Local secrets & env (never commit)
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+.env.secrets
+.oauth-secrets.env
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+*.swp
+*.bak
+
+# Logs / coverage
+*.log
+coverage/
