@@ -72,11 +72,44 @@ export function looksLikeTransactionalCta(parsed: ParsedMail): boolean {
   return false;
 }
 
+/**
+ * Broadcast Terms / privacy / legal updates (often from contact@ / hello@ / team@).
+ * These announce policy changes; they do not ask for an email reply.
+ */
+export function looksLikePolicyBroadcast(parsed: ParsedMail): boolean {
+  const subject = parsed.subject || "";
+  const body = parsed.body || parsed.snippet || "";
+  const blob = `${subject}\n${body}`;
+  const legalTopic =
+    /\bterms(?:\s+of\s+(?:service|use))?\b|\bprivacy\s+policy\b|\blegal\s+(?:update|notice)\b|\btos\b/i.test(
+      blob,
+    );
+  const updated =
+    /\b(?:updated?|update|changes?|revised?|new version|replaces the)\b/i.test(blob);
+  if (legalTopic && updated) return true;
+  if (
+    /we (?:have )?updated (?:our |the )?(?:terms|privacy|tos)\b/i.test(blob) ||
+    /terms of service.{0,80}(?:updated|new version|live at|replaces)/i.test(blob)
+  ) {
+    return true;
+  }
+  // Subject like "Important: … Terms Updated"
+  if (
+    /\bterms\b/i.test(subject) &&
+    /\b(?:updated?|update|changes?)\b/i.test(subject)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Return a category if a rule matches, else null → LLM / ambiguous path. */
 export function preClassify(parsed: ParsedMail): "Marketing" | "Notification" | null {
   if (isBulkMarketing(parsed)) return "Marketing";
   if (isAutomatedSender(parsed.from)) return "Notification";
   // Strong transactional CTA without noreply From (hello@/support@ brands).
   if (looksLikeTransactionalCta(parsed)) return "Notification";
+  // ToS / privacy / legal broadcasts (e.g. contact@vast.ai "Terms Updated").
+  if (looksLikePolicyBroadcast(parsed)) return "Notification";
   return null;
 }

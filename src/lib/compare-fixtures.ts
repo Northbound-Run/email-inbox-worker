@@ -149,6 +149,19 @@ export const COMPARE_FIXTURES: CompareFixture[] = [
         "Do you need medication counselling? Your renewal is approved. Before we send your order, would you like to speak to a pharmacist about your medication? No, just ship my order. Yes, have a pharmacist call me. Note: If we don't hear back from you in 24 hours, we'll ship your order.",
     },
   },
+  {
+    id: "vast_terms_notification",
+    expected: "Notification",
+    ownerEmail: OWNER,
+    notes: "2026-09-15 mis-wake: contact@ + ToS broadcast, not an email ask",
+    mail: {
+      from: "contact@vast.ai",
+      to: OWNER,
+      subject: "Important: Vast.ai Terms Updated",
+      body:
+        "Hello, We updated the Vast.ai Terms of Service. The new version is live at vast.ai/terms and replaces the November 10, 2025 version. What changed: Marketplace data. Need data access beyond this? Email data@vast.ai. Sincerely, The Vast.ai Team",
+    },
+  },
 {
     id: "stripe_receipt_notification",
     expected: "Notification",
