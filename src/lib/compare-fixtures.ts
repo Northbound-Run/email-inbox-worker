@@ -162,6 +162,20 @@ export const COMPARE_FIXTURES: CompareFixture[] = [
         "Hello, We updated the Vast.ai Terms of Service. The new version is live at vast.ai/terms and replaces the November 10, 2025 version. What changed: Marketplace data. Need data access beyond this? Email data@vast.ai. Sincerely, The Vast.ai Team",
     },
   },
+  {
+    id: "kyle_terms_negotiation_not_broadcast",
+    expected: "FYI",
+    ownerEmail: OWNER,
+    notes: "2026-09-15 regression: Re: Updated Terms & Conditions must NOT preclassify Notification",
+    mail: {
+      from: "kyle@kylemark.ca",
+      to: "annika@example.com",
+      cc: OWNER,
+      subject: "Re: Updated Terms & Conditions",
+      body:
+        "Hey Annika & Matt, I've sat with all of this and this is where I've landed. There's real trust involved. Looking for real equity partners.",
+    },
+  },
 {
     id: "stripe_receipt_notification",
     expected: "Notification",

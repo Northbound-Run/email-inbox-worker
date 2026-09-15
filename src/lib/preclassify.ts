@@ -73,30 +73,52 @@ export function looksLikeTransactionalCta(parsed: ParsedMail): boolean {
 }
 
 /**
- * Broadcast Terms / privacy / legal updates (often from contact@ / hello@ / team@).
- * These announce policy changes; they do not ask for an email reply.
+ * Broadcast Terms-of-Service / privacy / legal *product* updates
+ * (e.g. contact@vast.ai "Terms Updated"). Must NOT match human deal threads
+ * like "Re: Updated Terms & Conditions".
  */
 export function looksLikePolicyBroadcast(parsed: ParsedMail): boolean {
-  const subject = parsed.subject || "";
+  const subject = (parsed.subject || "").trim();
   const body = parsed.body || parsed.snippet || "";
   const blob = `${subject}\n${body}`;
-  const legalTopic =
-    /\bterms(?:\s+of\s+(?:service|use))?\b|\bprivacy\s+policy\b|\blegal\s+(?:update|notice)\b|\btos\b/i.test(
+
+  // Reply / forward threads are almost always human negotiation, not a ToS blast.
+  if (/^(?:(?:re|fw|fwd)\s*:\s*)+/i.test(subject)) return false;
+
+  // Require product/legal-policy language — bare "Terms & Conditions" is too common
+  // in commercial negotiation subjects.
+  const policyTopic =
+    /\bterms\s+of\s+(?:service|use)\b|\bprivacy\s+policy\b|\blegal\s+(?:update|notice)\b|\b(?:our|the)\s+tos\b/i.test(
       blob,
     );
-  const updated =
-    /\b(?:updated?|update|changes?|revised?|new version|replaces the)\b/i.test(blob);
-  if (legalTopic && updated) return true;
-  if (
+  if (!policyTopic) return false;
+
+  const announce =
     /we (?:have )?updated (?:our |the )?(?:terms|privacy|tos)\b/i.test(blob) ||
-    /terms of service.{0,80}(?:updated|new version|live at|replaces)/i.test(blob)
+    /terms of (?:service|use).{0,100}(?:updated|new version|live at|replaces)/i.test(
+      blob,
+    ) ||
+    /privacy policy.{0,80}(?:updated|new version|live at|replaces)/i.test(blob) ||
+    (/\bterms\s+of\s+(?:service|use)\b/i.test(subject) &&
+      /\b(?:updated?|update|changes?)\b/i.test(subject));
+
+  if (!announce) return false;
+
+  // Prefer broadcast senders / team sign-off; still allow strong announce phrasing
+  // from contact@-style mailboxes without a personal first-name reply tone.
+  if (isAutomatedSender(parsed.from)) return true;
+  if (/\bthe\s+[\w .&-]{2,40}\s+team\b/i.test(body)) return true;
+  if (
+    /(?:^|[\s<])(?:contact|hello|info|team|support|legal|noreply)@/i.test(
+      parsed.from || "",
+    )
   ) {
     return true;
   }
-  // Subject like "Important: … Terms Updated"
+  // Strong "we updated the Terms of Service … live at" without needing From heuristics.
   if (
-    /\bterms\b/i.test(subject) &&
-    /\b(?:updated?|update|changes?)\b/i.test(subject)
+    /we (?:have )?updated (?:our |the )?terms of (?:service|use)\b/i.test(blob) &&
+    /\b(?:live at|new version|replaces the)\b/i.test(blob)
   ) {
     return true;
   }
