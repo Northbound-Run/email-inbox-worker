@@ -6,14 +6,14 @@
  * Usage:
  *   npm run setup
  *   npm run setup -- --project northbound-run --webhook-url URL --webhook-key KEY
- *   npm run setup -- --plan paid|free   # skip detect; pick CLASSIFIER_MODEL
+ *   npm run setup -- --classifier-model ~typesafe/jev-latest
+ *   OPENROUTER_API_KEY=… npm run setup   # or prompt during setup
  *   npm run setup -- --watch-only       # after OAuth success page
  *   npm run setup -- --worker-url URL   # override auto-detected workers.dev URL
  *
  * Requires: node 20+, gcloud (authenticated), wrangler (via npx), Cloudflare login.
- * CLASSIFIER_MODEL: Paid → @cf/zai-org/glm-5.3-flash; Free → @cf/meta/llama-3.1-8b-instruct-fp8
- * Plan detect: GET /accounts/{id}/subscriptions (needs #billing:read). Wrangler OAuth
- * usually 403s → we prompt Free vs Paid. Optional: CLOUDFLARE_API_TOKEN with billing read.
+ * CLASSIFIER_MODEL: default ~typesafe/jev-latest via OpenRouter Decisions API
+ * Needs secret OPENROUTER_API_KEY (env or interactive prompt).
  */
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
@@ -114,91 +114,30 @@ function secretPut(name, value) {
   console.log(`✓ secret ${name}`);
 }
 
-const MODEL_PAID = "@cf/zai-org/glm-5.3-flash";
-const MODEL_FREE = "@cf/meta/llama-3.1-8b-instruct-fp8";
+const DEFAULT_JEV_MODEL = "~typesafe/jev-latest";
 
-function wranglerAccountId() {
-  const who = runCapture("npx", ["wrangler", "whoami"]);
-  const ids = [...who.out.matchAll(/\b([a-f0-9]{32})\b/gi)].map((m) => m[1].toLowerCase());
-  if (ids.length) return ids[0];
-  return process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || null;
-}
-
-function readCloudflareToken() {
-  if (process.env.CLOUDFLARE_API_TOKEN?.trim()) return process.env.CLOUDFLARE_API_TOKEN.trim();
-  const homes = [
-    join(process.env.HOME || "", "Library/Preferences/.wrangler/config/default.toml"),
-    join(process.env.HOME || "", ".wrangler/config/default.toml"),
-    join(process.env.HOME || "", ".config/.wrangler/config/default.toml"),
-  ];
-  for (const p of homes) {
-    if (!existsSync(p)) continue;
-    const raw = readFileSync(p, "utf8");
-    const m = raw.match(/oauth_token\s*=\s*"([^"]+)"/) || raw.match(/oauth_token\s*=\s*'([^']+)'/);
-    if (m) return m[1];
-  }
-  return null;
-}
-
-/** @returns {Promise<{plan: "paid"|"free"|"unknown", source: string, model: string}>} */
-async function resolveClassifierPlan() {
+/** @returns {{ source: string, model: string }} */
+function resolveClassifierModel() {
   if (args.classifierModel) {
-    return { plan: "unknown", source: "flag --classifier-model", model: String(args.classifierModel) };
+    return { source: "flag --classifier-model", model: String(args.classifierModel) };
   }
-  if (args.plan === "paid" || args.plan === "free") {
-    return {
-      plan: args.plan,
-      source: "flag --plan",
-      model: args.plan === "paid" ? MODEL_PAID : MODEL_FREE,
-    };
-  }
+  return { source: "default", model: DEFAULT_JEV_MODEL };
+}
 
-  const accountId = wranglerAccountId();
-  const token = readCloudflareToken();
-  if (accountId && token) {
-    try {
-      const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/subscriptions`,
-        { headers: { authorization: `Bearer ${token}` } },
-      );
-      if (res.status === 403 || res.status === 401) {
-        console.log("⚠ Cloudflare subscriptions API needs Account Settings: Read (#billing:read).");
-        console.log("  Wrangler OAuth usually lacks it — prompting instead.");
-      } else if (res.ok) {
-        const data = await res.json();
-        const subs = data.result || [];
-        const paid = subs.some((s) => (s.rate_plan || {}).id === "workers_paid");
-        const plan = paid ? "paid" : "free";
-        console.log(`✓ Workers plan detected via API: ${plan}`);
-        return {
-          plan,
-          source: "subscriptions API",
-          model: paid ? MODEL_PAID : MODEL_FREE,
-        };
-      } else {
-        console.log(`⚠ subscriptions API HTTP ${res.status} — prompting for plan.`);
-      }
-    } catch (err) {
-      console.log(`⚠ plan detect failed (${err instanceof Error ? err.message : err}) — prompting.`);
-    }
-  } else {
-    console.log("⚠ No Cloudflare token/account for plan detect — prompting.");
+/** Prompt / env for OpenRouter key (never echoed). */
+async function resolveOpenRouterKey() {
+  const fromEnv = process.env.OPENROUTER_API_KEY?.trim();
+  if (fromEnv) {
+    console.log("✓ OPENROUTER_API_KEY from environment");
+    return fromEnv;
   }
-
   console.log(`
-Classifier model depends on your Cloudflare Workers plan:
-  • Free  → ${MODEL_FREE}
-      (cheaper neurons; ~88% label accuracy in our bake-off)
-  • Paid  → ${MODEL_PAID}  (~$5/mo Workers Paid)
-      (best accuracy in our bake-off: 16/16)
+Classifier uses OpenRouter Decisions + TypeSafe Jev (${DEFAULT_JEV_MODEL}).
+Create a key at https://openrouter.ai/keys
 `);
-  const ans = (await ask("Workers plan? (free / paid)", "paid")).toLowerCase();
-  const plan = ans.startsWith("f") ? "free" : "paid";
-  return {
-    plan,
-    source: "prompt",
-    model: plan === "paid" ? MODEL_PAID : MODEL_FREE,
-  };
+  const key = (await ask("OpenRouter API key (sk-or-…)", "")).trim();
+  if (!key) throw new Error("OPENROUTER_API_KEY is required for classify");
+  return key;
 }
 
 function setClassifierModelVar(model) {
@@ -231,9 +170,6 @@ function ensureKvBinding(projectSlug) {
   const m = created.out.match(/id\s*=\s*"([^"]+)"/);
   if (!m) throw new Error(`Could not parse KV id from:\n${created.out}`);
   const id = m[1];
-  if (!toml.includes("[ai]")) {
-    toml += `\n[ai]\nbinding = "AI"\n`;
-  }
   toml += `\n[[kv_namespaces]]\nbinding = "INBOX_STATE"\nid = "${id}"\n`;
   writeFileSync(tomlPath, toml);
   console.log(`✓ KV INBOX_STATE ${id}`);
@@ -472,11 +408,12 @@ async function main() {
     "roles/iam.serviceAccountTokenCreator",
   ]);
 
-  // Classifier model from Workers Free vs Paid
-  console.log("\nChoosing Workers AI classifier…");
-  const chosen = await resolveClassifierPlan();
-  console.log(`→ plan=${chosen.plan} (${chosen.source}) → ${chosen.model}`);
+  // Classifier: OpenRouter + TypeSafe Jev
+  console.log("\nConfiguring OpenRouter classifier…");
+  const chosen = resolveClassifierModel();
+  console.log(`→ model=${chosen.model} (${chosen.source})`);
   setClassifierModelVar(chosen.model);
+  const openRouterKey = await resolveOpenRouterKey();
 
   // Cloudflare
   console.log("\nCloudflare: KV + deploy…");
@@ -490,6 +427,7 @@ async function main() {
   const oauthCallback = `${workerBase}/oauth/callback`;
 
   console.log("\nWriting Worker secrets…");
+  secretPut("OPENROUTER_API_KEY", openRouterKey);
   secretPut("GROK_WEBHOOK_URL", webhookUrl);
   secretPut("GROK_WEBHOOK_KEY", webhookKey);
   secretPut("GOOGLE_CLIENT_ID", oauthClientId);
@@ -563,7 +501,7 @@ Almost done — connect Gmail (browser step)
    Cron (0 14 * * * UTC) renews users.watch for every registered mailbox.
    Manual renew: POST ${workerBase}/cron/renew-watches  or  POST /watch
 
-Classifier: wrangler.toml [vars] CLASSIFIER_MODEL (Free=llama fp8, Paid=glm-5.3-flash).
+Classifier: OpenRouter Decisions + ~typesafe/jev-latest (secret OPENROUTER_API_KEY).
 
 Then send a test "can you reply?" email.
 ────────────────────────────────────────

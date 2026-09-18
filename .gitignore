@@ -21,3 +21,6 @@ dist/
 # Logs / coverage
 *.log
 coverage/
+
+.openrouter-api-key
+.dev.vars

@@ -2,8 +2,6 @@ name = "email-webhook-spike"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
 
-[ai]
-binding = "AI"
 
 [[kv_namespaces]]
 binding = "INBOX_STATE"
@@ -14,14 +12,14 @@ id = "5a936f0100db491ea09910443abb564c"
 [triggers]
 crons = ["0 14 * * *", "20 */4 * * *"]
 
-# Bake-off 4 models (16 Hermes/inbox fixtures): glm-5.3-flash 16/16 labels+JSON;
-# llama fp8 14/16; gpt-oss-20b 14/16; glm-4.7-flash 12/16 (slow). Flip back if needed.
+# Classifier: OpenRouter Decisions + TypeSafe Jev (~typesafe/jev-latest).
 [vars]
 # Set OWNER_EMAIL / WORK_EMAIL via `wrangler secret put` (or dashboard) per deploy.
 # Do not commit real addresses.
-CLASSIFIER_MODEL = "@cf/zai-org/glm-5.3-flash"
+CLASSIFIER_MODEL = "~typesafe/jev-latest"
 
 # Secrets:
+#   OPENROUTER_API_KEY — required for LLM classify (https://openrouter.ai/keys)
 #   GROK_WEBHOOK_URL, GROK_WEBHOOK_KEY
 #   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GMAIL_REFRESH_TOKEN (optional legacy)
 #   GMAIL_PUBSUB_TOPIC (projects/ID/topics/NAME)

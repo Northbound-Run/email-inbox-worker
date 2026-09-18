@@ -2,12 +2,12 @@
 
 Cloudflare Worker companion for the **Email** Grok Bot (Hermes-style inbox organizer).
 
-**Worker** does cheap triage (pre-classify, Workers AI, CC→FYI, 2FA/shipping, Pub/Sub Push, history drain).  
+**Worker** does cheap triage (pre-classify, OpenRouter Jev classify, CC→FYI, 2FA/shipping, Pub/Sub Push, history drain).  
 **Email bot** wakes only for `To Respond` and writes **unsent** Gmail drafts.
 
 ## Install
 
-Prereqs: Node 20+, [gcloud](https://cloud.google.com/sdk/docs/install) (`gcloud auth login`), Cloudflare account (Wrangler will open a browser login if needed).
+Prereqs: Node 20+, [gcloud](https://cloud.google.com/sdk/docs/install) (`gcloud auth login`), Cloudflare account (Wrangler will open a browser login if needed), and an [OpenRouter](https://openrouter.ai/keys) API key for classify.
 
 ```bash
 git clone git@github.com:Northbound-Run/email-inbox-worker.git
@@ -25,10 +25,11 @@ Default OAuth is **link-in-browser**: setup prints `/oauth/start` — open it, a
 1. Enable Gmail + Pub/Sub APIs on your GCP project  
 2. Create topic + grant `gmail-api-push` Publisher  
 3. Create a push-auth service account + token-creator binding  
-4. `wrangler deploy` the Worker (AI + KV) and detect the workers.dev URL  
-5. Set secrets (Grok webhook URL/key, OAuth client, topic, push audience)  
-6. Create/update the **Push** subscription → Worker `/pubsub` (OIDC)  
-7. Print the OAuth redirect URI + `/oauth/start` link  
+4. Set `CLASSIFIER_MODEL` to `~typesafe/jev-latest` and collect `OPENROUTER_API_KEY`  
+5. `wrangler deploy` the Worker (KV) and detect the workers.dev URL  
+6. Set secrets (OpenRouter key, Grok webhook URL/key, OAuth client, topic, push audience)  
+7. Create/update the **Push** subscription → Worker `/pubsub` (OIDC)  
+8. Print the OAuth redirect URI + `/oauth/start` link  
 
 Then you only:
 
@@ -39,7 +40,7 @@ Then you only:
 ### Non-interactive
 
 ```bash
-npm run setup -- \
+OPENROUTER_API_KEY='sk-or-…' npm run setup -- \
   --project my-gcp-project \
   --topic email-inbox-notifications \
   --webhook-url 'https://…' \
@@ -52,21 +53,21 @@ npm run setup -- \
 
 `--worker-url` is optional when auto-detect succeeds.
 
-## Cost (Cloudflare)
+## Cost (Cloudflare + OpenRouter)
 
-Rough monthly estimate for Workers + KV + Workers AI: see [docs/COST.md](docs/COST.md).  
-Typical 1–2 mailboxes with default `glm-5.3-flash`: about **$5–10/mo** (mostly the Workers Paid $5 base).
+Rough monthly estimate for Workers + KV + OpenRouter classify: see [docs/COST.md](docs/COST.md).  
+Typical 1–2 mailboxes: about **a few dollars / month** (Workers Free often enough; classify is OpenRouter Jev).
 
 ## Architecture
 
 | Layer | Owns |
 |---|---|
-| Worker | Pub/Sub Push (OIDC), history drain, pre-classify, Workers AI classify, CC→FYI, detects, KV cursor |
+| Worker | Pub/Sub Push (OIDC), history drain, pre-classify, OpenRouter Jev classify, CC→FYI, detects, KV cursor |
 | Email bot | Webhook wake only for To Respond → unsent draft |
 
 ## Status
 
-- [x] Draft wake + Workers AI triage + CC hard gate  
+- [x] Draft wake + OpenRouter Jev triage + CC hard gate  
 - [x] OAuth capture on Worker (`/oauth/start`)  
 - [x] Pub/Sub OIDC + history drain + `/watch`  
 - [x] CLI installer (`npm run setup`) with workers.dev URL auto-detect  

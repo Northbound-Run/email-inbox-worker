@@ -1,7 +1,7 @@
 /**
  * Email inbox Worker — Hermes replacement companion (cheap path).
  *
- * Worker: pre-classify + cheap LLM classify + 2FA/shipping detect
+ * Worker: pre-classify + OpenRouter Jev classify + 2FA/shipping detect
  * Email bot webhook: ONLY woken for To Respond drafts
  *
  * POST /triage     — classify a parsed mail; wake Email iff To Respond
@@ -64,7 +64,8 @@ import {
 export interface Env {
   GROK_WEBHOOK_URL: string;
   GROK_WEBHOOK_KEY: string;
-  AI: import("./lib/classify").AiBinding;
+  /** OpenRouter API key — required for Jev Decisions classify when preClassify misses. */
+  OPENROUTER_API_KEY?: string;
   CLASSIFIER_MODEL?: string;
   OWNER_EMAIL?: string;
   WORK_EMAIL?: string;
@@ -79,6 +80,8 @@ export interface Env {
   GMAIL_PUBSUB_TOPIC?: string; // projects/…/topics/…
   // KV: per-mailbox tokens, cursors, watch expiration, mailboxes[]
   INBOX_STATE?: KVNamespace;
+  /** @deprecated optional leftover Workers AI binding; unused by classify. */
+  AI?: import("./lib/classify").AiBinding;
 }
 
 type ScenarioPayload = Record<string, unknown>;
@@ -881,8 +884,8 @@ async function handlePubSub(request: Request, env: Env): Promise<Response> {
 
 
 async function handleClassifyCompare(request: Request, env: Env): Promise<Response> {
-  if (!env.AI) {
-    return json({ ok: false, error: "Workers AI binding missing" }, 500);
+  if (!env.OPENROUTER_API_KEY?.trim()) {
+    return json({ ok: false, error: "OPENROUTER_API_KEY missing" }, 500);
   }
   let body: {
     fixtures?: CompareFixture[];
@@ -916,7 +919,7 @@ async function handleClassifyCompare(request: Request, env: Env): Promise<Respon
     for (const model of models) {
       perModel[model] = await probeClassifierModel(
         fix.mail,
-        env.AI,
+        env,
         model,
         owner,
         fix.expected,
@@ -1057,7 +1060,8 @@ export default {
             : []),
         ],
         classifier_model: env.CLASSIFIER_MODEL || DEFAULT_CLASSIFIER_MODEL,
-        classifier_fallback: DEFAULT_CLASSIFIER_MODEL,
+        classifier_provider: "openrouter-decisions",
+        openrouter_configured: Boolean(env.OPENROUTER_API_KEY?.trim()),
         debug: debugEnabled(env),
         mailboxes: boxes,
         watch_expiration: watchMeta,
