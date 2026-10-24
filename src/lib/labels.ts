@@ -31,3 +31,64 @@ export function labelName(category: InboundCategory): string {
   };
   return `${order[category]}: ${category}`;
 }
+
+/**
+ * Returns all managed label names (source of truth).
+ * These are the labels this system creates and controls.
+ */
+export function getManagedLabelNames(): string[] {
+  return INBOUND_CATEGORIES.map((cat) => labelName(cat));
+}
+
+/**
+ * Resolve managed label IDs from the label cache.
+ * Returns a Map of label name → label ID for all managed labels that exist.
+ */
+export function resolveManagedLabelIds(
+  cache: Map<string, string>,
+): Map<string, string> {
+  const managed = new Map<string, string>();
+  for (const name of getManagedLabelNames()) {
+    const id = cache.get(name);
+    if (id) managed.set(name, id);
+  }
+  return managed;
+}
+
+/**
+ * Enforce "at most one managed label" rule.
+ * 
+ * Given a label to add and the message's current labels, returns:
+ * - addLabelIds: [labelIdToAdd]
+ * - removeLabelIds: [all other managed label IDs present on the message] + [any additional remove IDs]
+ * 
+ * This ensures the message ends up with AT MOST ONE managed label.
+ * Non-managed labels (user labels, Gmail system labels) are left untouched.
+ * 
+ * @param labelIdToAdd - The managed label ID to apply
+ * @param currentLabelIds - The message's current label IDs
+ * @param managedLabelIds - Map of managed label name → ID
+ * @param additionalRemove - Optional additional label IDs to remove (e.g., INBOX)
+ * @returns { addLabelIds, removeLabelIds } for Gmail messages.modify
+ */
+export function enforceOneManagedLabel(
+  labelIdToAdd: string,
+  currentLabelIds: string[],
+  managedLabelIds: Map<string, string>,
+  additionalRemove: string[] = [],
+): { addLabelIds: string[]; removeLabelIds: string[] } {
+  const removeLabelIds = new Set<string>(additionalRemove);
+  
+  // Find all managed labels currently on the message
+  const allManagedIds = new Set(managedLabelIds.values());
+  for (const currentId of currentLabelIds) {
+    if (allManagedIds.has(currentId) && currentId !== labelIdToAdd) {
+      removeLabelIds.add(currentId);
+    }
+  }
+  
+  return {
+    addLabelIds: [labelIdToAdd],
+    removeLabelIds: Array.from(removeLabelIds),
+  };
+}

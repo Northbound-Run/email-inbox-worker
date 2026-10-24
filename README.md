@@ -65,6 +65,26 @@ Typical 1–2 mailboxes: about **a few dollars / month** (Workers Free often eno
 | Worker | Pub/Sub Push (OIDC), history drain, pre-classify, OpenRouter Jev classify, CC→FYI, detects, KV cursor |
 | Email bot | Webhook wake only for To Respond → unsent draft |
 
+## Label Management
+
+The Worker applies **managed labels** to categorize incoming mail:
+
+- `1: To Respond`
+- `2: FYI`
+- `3: Comment`
+- `4: Notification`
+- `5: Meeting Update`
+- `8: Marketing`
+
+**Enforced rule:** Any message modified by the Worker ends up with **at most one** managed label.
+
+- When applying a new managed label, all other managed labels are removed in the same Gmail API call
+- Non-managed labels (user labels, Gmail system labels like `INBOX`/`UNREAD`/`STARRED`) are preserved
+- Labels are created lazily on first use per account
+- Multi-account: label IDs are resolved independently per mailbox email
+
+See `src/lib/labels.ts` for the centralized enforcement logic.
+
 ## Status
 
 - [x] Draft wake + OpenRouter Jev triage + CC hard gate  
@@ -72,6 +92,7 @@ Typical 1–2 mailboxes: about **a few dollars / month** (Workers Free often eno
 - [x] Pub/Sub OIDC + history drain + `/watch`  
 - [x] CLI installer (`npm run setup`) with workers.dev URL auto-detect  
 - [x] Label apply / archive on Worker  
+- [x] Single managed label enforcement  
 - [x] Watch Cron renew (`0 14 * * *` UTC + `POST /cron/renew-watches`)  
 - [x] Multi-account (per-email KV + migrate legacy oauth:* keys)  
 - [ ] Grok Bot marketplace template export  

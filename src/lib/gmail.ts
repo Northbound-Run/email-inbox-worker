@@ -248,6 +248,19 @@ export async function listUserLabels(
     .map((l) => ({ id: String(l.id), name: String(l.name) }));
 }
 
+/**
+ * Populate label cache with all user labels.
+ * Call this once before resolving managed label IDs.
+ */
+export async function populateLabelCache(
+  accessToken: string,
+  cache: Map<string, string>,
+): Promise<void> {
+  if (cache.size > 0) return; // Already populated
+  const labels = await listUserLabels(accessToken);
+  for (const l of labels) cache.set(l.name, l.id);
+}
+
 export async function ensureLabelId(
   accessToken: string,
   name: string,
@@ -255,8 +268,7 @@ export async function ensureLabelId(
 ): Promise<string> {
   const hit = cache.get(name);
   if (hit) return hit;
-  const labels = await listUserLabels(accessToken);
-  for (const l of labels) cache.set(l.name, l.id);
+  await populateLabelCache(accessToken, cache);
   const existing = cache.get(name);
   if (existing) return existing;
   const res = await gmailFetch(accessToken, "labels", {
