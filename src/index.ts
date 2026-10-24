@@ -37,12 +37,18 @@ import {
   getProfile,
   modifyMessageLabels,
   parseMessage,
+  populateLabelCache,
   recipientRole,
   StaleCursor,
   watchMailbox,
   type GmailEnv,
 } from "./lib/gmail";
-import { labelName, skipInbox } from "./lib/labels";
+import {
+  labelName,
+  skipInbox,
+  resolveManagedLabelIds,
+  enforceOneManagedLabel,
+} from "./lib/labels";
 import {
   buildAuthUrl,
   exchangeCode,
@@ -483,18 +489,54 @@ async function processInboxMessage(
   let labelsApplied: {
     add?: string;
     removeInbox?: boolean;
+    removedManagedLabels?: string[];
     deferred?: boolean;
     error?: string;
   } = {};
   try {
     const cache = new Map<string, string>();
+    // Populate cache with all labels first (including managed labels)
+    await populateLabelCache(accessToken, cache);
     const labelId = await ensureLabelId(accessToken, label, cache);
-    const remove: string[] = [];
-    if (shouldSkipInbox && labels.includes("INBOX")) remove.push("INBOX");
+    
+    // Resolve all managed label IDs for this account
+    const managedLabelIds = resolveManagedLabelIds(cache);
+    
+    // Build additional remove list (e.g., INBOX)
+    const additionalRemove: string[] = [];
+    if (shouldSkipInbox && labels.includes("INBOX")) {
+      additionalRemove.push("INBOX");
+    }
+    
+    // Enforce "at most one managed label" rule
+    const { addLabelIds, removeLabelIds } = enforceOneManagedLabel(
+      labelId,
+      labels,
+      managedLabelIds,
+      additionalRemove,
+    );
+    
+    // Track which managed labels we're removing (for logging/debugging)
+    const removedManagedLabels = removeLabelIds.filter((id) => 
+      Array.from(managedLabelIds.values()).includes(id)
+    ).map((id) => {
+      // Find the name for this ID
+      for (const [name, labelId] of managedLabelIds.entries()) {
+        if (labelId === id) return name;
+      }
+      return id;
+    });
+    
     // Apply category label (To Respond only reached here if wake.ok).
     // Archive Marketing/Notification/etc. Do NOT archive To Respond.
-    await modifyMessageLabels(accessToken, messageId, [labelId], remove);
-    labelsApplied = { add: label, removeInbox: remove.includes("INBOX") };
+    // Remove all other managed labels in the same call.
+    await modifyMessageLabels(accessToken, messageId, addLabelIds, removeLabelIds);
+    
+    labelsApplied = {
+      add: label,
+      removeInbox: removeLabelIds.includes("INBOX"),
+      removedManagedLabels: removedManagedLabels.length > 0 ? removedManagedLabels : undefined,
+    };
   } catch (err) {
     labelsApplied = {
       error: err instanceof Error ? err.message : String(err),
