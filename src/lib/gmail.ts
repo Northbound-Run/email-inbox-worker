@@ -316,3 +316,56 @@ export async function modifyMessageLabels(
   }
 }
 
+/**
+ * Get all messages in a thread (metadata format for label_ids only).
+ * Returns array of { id, labelIds, internalDate }.
+ */
+export async function getThreadMessages(
+  accessToken: string,
+  threadId: string,
+): Promise<Array<{ id: string; labelIds: string[]; internalDate: string }>> {
+  const res = await gmailFetch(
+    accessToken,
+    `threads/${encodeURIComponent(threadId)}?format=metadata`,
+  );
+  if (!res.ok) throw new Error(`threads.get ${threadId}: ${res.status}`);
+  const data = (await res.json()) as {
+    messages?: Array<{
+      id?: string;
+      labelIds?: string[];
+      internalDate?: string;
+    }>;
+  };
+  return (data.messages || []).map((m) => ({
+    id: String(m.id || ""),
+    labelIds: m.labelIds || [],
+    internalDate: String(m.internalDate || "0"),
+  }));
+}
+
+/**
+ * Remove specified labels from all messages in a thread.
+ * Uses threads.modify to remove labels thread-wide.
+ */
+export async function modifyThreadLabels(
+  accessToken: string,
+  threadId: string,
+  addLabelIds: string[],
+  removeLabelIds: string[],
+): Promise<void> {
+  if (addLabelIds.length === 0 && removeLabelIds.length === 0) return;
+  
+  const res = await gmailFetch(
+    accessToken,
+    `threads/${encodeURIComponent(threadId)}/modify`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ addLabelIds, removeLabelIds }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`threads.modify ${threadId}: ${res.status} ${await res.text()}`);
+  }
+}
+
