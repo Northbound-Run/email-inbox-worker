@@ -29,6 +29,7 @@ import {
 import { detect2fa } from "./detect/twofa";
 import { detectShipping } from "./detect/shipping";
 import { decodeGmailNotification, verifyPubSubOidc } from "./lib/pubsub";
+import { isGofoboEmail, forwardGofoboEmail } from "./lib/gofobo";
 import {
   drainHistory,
   ensureLabelId,
@@ -88,6 +89,9 @@ export interface Env {
   INBOX_STATE?: KVNamespace;
   /** @deprecated optional leftover Workers AI binding; unused by classify. */
   AI?: import("./lib/classify").AiBinding;
+  // Gofobo screening pass forwarding (optional)
+  MOVIES_WEBHOOK_URL?: string;
+  MOVIES_WEBHOOK_AUTH?: string;
 }
 
 type ScenarioPayload = Record<string, unknown>;
@@ -411,6 +415,18 @@ async function processInboxMessage(
   if (!labels.includes("INBOX")) {
     return { messageId, skipped: "not-in-inbox", subject: parsed.subject };
   }
+  
+  // Fast-path: Gofobo screening pass emails
+  // Detect and forward BEFORE any LLM classification
+  if (isGofoboEmail(parsed.from || "", parsed.subject || "", account)) {
+    const gofoboResult = await forwardGofoboEmail(env, parsed);
+    // Log the forward result but don't fail the entire triage
+    if (!gofoboResult.ok && !gofoboResult.skipped) {
+      console.error(`Gofobo forward failed for ${messageId}: ${gofoboResult.error}`);
+    }
+    // Continue with normal labeling after the forward
+  }
+  
   const textBody = `${parsed.subject || ""}\n${parsed.body || ""}`;
   const twofa = detect2fa(textBody);
   const shipping = detectShipping(textBody);
