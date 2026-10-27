@@ -25,4 +25,7 @@ CLASSIFIER_MODEL = "~typesafe/jev-latest"
 #   GMAIL_PUBSUB_TOPIC (projects/ID/topics/NAME)
 #   PUBLIC_PUSH_URL (https://…/pubsub) — OIDC audience
 # Optional: OWNER_EMAIL, WORK_EMAIL, ALLOW_INSECURE_PUSH=1, ALLOW_DEBUG=1
+# Optional Gofobo screening pass forwarding:
+#   MOVIES_WEBHOOK_URL — endpoint to POST Gofobo emails (personal mailbox only)
+#   MOVIES_WEBHOOK_AUTH — bearer token for movies webhook
 # CLASSIFIER_MODEL is set above; override via secret if desired.

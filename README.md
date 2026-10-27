@@ -95,6 +95,7 @@ See `src/lib/labels.ts` for the centralized enforcement logic.
 - [x] Single managed label enforcement  
 - [x] Watch Cron renew (`0 14 * * *` UTC + `POST /cron/renew-watches`)  
 - [x] Multi-account (per-email KV + migrate legacy oauth:* keys)  
+- [x] Gofobo screening pass fast-path forwarding (optional)  
 - [ ] Grok Bot marketplace template export  
 
 ## Multi-account + watch renew
@@ -113,3 +114,48 @@ Legacy `oauth:refresh_token` / `oauth:email` / `cursor:<email>` migrate on read.
 Add a second mailbox: open `/oauth/start` signed into that Google account (optional `?account=work`).  
 Map wake account via secrets/vars `OWNER_EMAIL` / `WORK_EMAIL`.  
 Cron renews watch daily; does **not** advance cursors past unprocessed mail.
+
+## Optional: Gofobo Screening Pass Forwarding
+
+The Worker can detect and immediately forward Gofobo screening pass emails to a separate webhook endpoint, before any LLM classification. This is a fast-path for personal mailbox messages only.
+
+### Setup
+
+Set two Worker secrets (both are required for forwarding to activate):
+
+```bash
+wrangler secret put MOVIES_WEBHOOK_URL
+# Enter: https://your-endpoint.example.com/gofobo
+
+wrangler secret put MOVIES_WEBHOOK_AUTH
+# Enter: your-bearer-token
+```
+
+### Detection
+
+Messages are forwarded when:
+- From address is `no-reply@gofobo.com`, OR
+- Subject contains `"Sign Up for Passes for"`
+
+AND the message is in the **personal** mailbox (not work).
+
+### Forwarding
+
+On match, the Worker immediately POSTs JSON to `MOVIES_WEBHOOK_URL` with header `Authorization: Bearer ${MOVIES_WEBHOOK_AUTH}`:
+
+```json
+{
+  "messageId": "msg-id",
+  "threadId": "thread-id",
+  "subject": "Sign Up for Passes for Gladiator II",
+  "from": "no-reply@gofobo.com",
+  "date": null,
+  "snippet": "...",
+  "claimLink": "https://gofobo.com/claim/abc123"
+}
+```
+
+- `claimLink` is the first `gofobo.com` URL found in the message body (text or HTML, decoded), or `null` if none.
+- Dedupe: the same `messageId` is never forwarded twice (KV with 30-day TTL).
+- Failures are logged but do **not** block normal labeling.
+- If either secret is missing, forwarding is silently skipped.
