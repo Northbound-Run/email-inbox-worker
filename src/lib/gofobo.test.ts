@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   isGofoboEmail,
   extractGofoboClaimLink,
+  extractDate,
   wasAlreadyForwarded,
   markForwarded,
   forwardGofoboEmail,
@@ -76,6 +77,71 @@ describe("extractGofoboClaimLink", () => {
   });
 });
 
+describe("extractDate", () => {
+  it("extracts and formats Date header as ISO string", () => {
+    const parsed: ParsedMail = {
+      date: "Tue, 27 Oct 2026 19:30:00 +0000",
+    };
+    const result = extractDate(parsed);
+    expect(result).toBe("2026-10-27T19:30:00.000Z");
+  });
+
+  it("falls back to internalDate when Date header is missing", () => {
+    const parsed: ParsedMail = {
+      internal_date: "1793129400000", // Tue, 27 Oct 2026 19:30:00 UTC
+    };
+    const result = extractDate(parsed);
+    expect(result).toBe("2026-10-27T19:30:00.000Z");
+  });
+
+  it("prefers Date header over internalDate", () => {
+    const parsed: ParsedMail = {
+      date: "Tue, 27 Oct 2026 19:30:00 +0000",
+      internal_date: "1730059900000", // Different time
+    };
+    const result = extractDate(parsed);
+    expect(result).toBe("2026-10-27T19:30:00.000Z");
+  });
+
+  it("falls back to internalDate when Date header is invalid", () => {
+    const parsed: ParsedMail = {
+      date: "Invalid Date String",
+      internal_date: "1793129400000",
+    };
+    const result = extractDate(parsed);
+    expect(result).toBe("2026-10-27T19:30:00.000Z");
+  });
+
+  it("returns null when both are missing", () => {
+    const parsed: ParsedMail = {};
+    const result = extractDate(parsed);
+    expect(result).toBe(null);
+  });
+
+  it("returns null when both are invalid", () => {
+    const parsed: ParsedMail = {
+      date: "Not a date",
+      internal_date: "not a number",
+    };
+    const result = extractDate(parsed);
+    expect(result).toBe(null);
+  });
+
+  it("handles various RFC 2822 date formats", () => {
+    const formats = [
+      { input: "Mon, 26 Oct 2026 12:00:00 -0700", expected: "2026-10-26T19:00:00.000Z" },
+      { input: "26 Oct 2026 12:00:00 +0000", expected: "2026-10-26T12:00:00.000Z" },
+      { input: "Mon, 26 Oct 26 12:00:00 GMT", expected: "2026-10-26T12:00:00.000Z" },
+    ];
+
+    formats.forEach(({ input, expected }) => {
+      const parsed: ParsedMail = { date: input };
+      const result = extractDate(parsed);
+      expect(result).toBe(expected);
+    });
+  });
+});
+
 describe("dedupe KV operations", () => {
   // Mock KV namespace
   const mockKV = () => {
@@ -116,6 +182,8 @@ describe("forwardGofoboEmail", () => {
     subject: "Sign Up for Passes for Test Movie",
     body: "Visit https://gofobo.com/claim/abc123 to claim.",
     snippet: "Visit https://gofobo.com/claim/abc123 to claim.",
+    date: "Tue, 27 Oct 2026 19:30:00 +0000",
+    internal_date: "1793129400000",
   };
 
   it("skips when MOVIES_WEBHOOK_URL is missing", async () => {
@@ -181,7 +249,7 @@ describe("forwardGofoboEmail", () => {
       threadId: "thread456",
       subject: "Sign Up for Passes for Test Movie",
       from: "no-reply@gofobo.com",
-      date: undefined,
+      date: "2026-10-27T19:30:00.000Z",
       snippet: "Visit https://gofobo.com/claim/abc123 to claim.",
       claimLink: "https://gofobo.com/claim/abc123",
     });
@@ -217,5 +285,62 @@ describe("forwardGofoboEmail", () => {
     globalThis.fetch = originalFetch;
 
     expect(capturedPayload.claimLink).toBe(null);
+    expect(capturedPayload.date).toBe("2026-10-27T19:30:00.000Z");
+  });
+
+  it("includes date from internalDate when Date header is missing", async () => {
+    let capturedPayload: any = null;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      capturedPayload = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    const mockKV = {
+      get: async () => null,
+      put: async () => {},
+    } as unknown as KVNamespace;
+
+    const env: GofoboEnv = {
+      MOVIES_WEBHOOK_URL: "https://example.com/webhook",
+      MOVIES_WEBHOOK_AUTH: "test-token",
+      INBOX_STATE: mockKV,
+    };
+
+    const parsed = { ...mockParsed, date: undefined };
+    await forwardGofoboEmail(env, parsed);
+
+    globalThis.fetch = originalFetch;
+
+    expect(capturedPayload.date).toBe("2026-10-27T19:30:00.000Z");
+  });
+
+  it("includes null date when both Date header and internalDate are missing", async () => {
+    let capturedPayload: any = null;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      capturedPayload = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    const mockKV = {
+      get: async () => null,
+      put: async () => {},
+    } as unknown as KVNamespace;
+
+    const env: GofoboEnv = {
+      MOVIES_WEBHOOK_URL: "https://example.com/webhook",
+      MOVIES_WEBHOOK_AUTH: "test-token",
+      INBOX_STATE: mockKV,
+    };
+
+    const parsed = { ...mockParsed, date: undefined, internal_date: undefined };
+    await forwardGofoboEmail(env, parsed);
+
+    globalThis.fetch = originalFetch;
+
+    expect(capturedPayload.date).toBe(null);
   });
 });

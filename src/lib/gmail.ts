@@ -19,6 +19,8 @@ export type ParsedMail = {
   one_click_unsubscribe?: boolean;
   precedence?: string;
   label_ids?: string[];
+  date?: string;
+  internal_date?: string;
 };
 
 function b64urlDecode(data: string): string {
@@ -51,6 +53,11 @@ function extractPlain(payload: Record<string, unknown>, limit = 4000): string {
 export function parseMessage(msg: Record<string, unknown>): ParsedMail {
   const payload = (msg.payload as Record<string, unknown>) || {};
   const headers = (payload.headers as Array<{ name?: string; value?: string }>) || [];
+  
+  // Extract Date header and internalDate (Gmail's timestamp in ms)
+  const dateHeader = header(headers, "date");
+  const internalDateMs = msg.internalDate ? String(msg.internalDate) : "";
+  
   return {
     id: String(msg.id || ""),
     thread_id: String(msg.threadId || ""),
@@ -64,6 +71,8 @@ export function parseMessage(msg: Record<string, unknown>): ParsedMail {
     one_click_unsubscribe: Boolean(header(headers, "list-unsubscribe-post")),
     precedence: header(headers, "precedence").trim().toLowerCase(),
     label_ids: Array.isArray(msg.labelIds) ? (msg.labelIds as string[]) : [],
+    date: dateHeader,
+    internal_date: internalDateMs,
   };
 }
 

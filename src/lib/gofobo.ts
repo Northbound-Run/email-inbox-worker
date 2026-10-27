@@ -13,7 +13,7 @@ export type GofoboForwardPayload = {
   threadId?: string;
   subject: string;
   from: string;
-  date?: string;
+  date: string | null;
   snippet?: string;
   claimLink: string | null;
 };
@@ -64,6 +64,38 @@ export function extractGofoboClaimLink(body: string): string | null {
     .replace(/&#x2F;/g, "/");
   
   return url;
+}
+
+/**
+ * Extract and format date as ISO string.
+ * Uses Date header if available, falls back to internalDate (Gmail's timestamp in ms).
+ */
+export function extractDate(parsed: ParsedMail): string | null {
+  // Try Date header first
+  if (parsed.date) {
+    try {
+      const dateObj = new Date(parsed.date);
+      if (!isNaN(dateObj.getTime())) {
+        return dateObj.toISOString();
+      }
+    } catch {
+      // Invalid date header, fall through to internalDate
+    }
+  }
+  
+  // Fall back to internalDate (Gmail's timestamp in milliseconds as string)
+  if (parsed.internal_date) {
+    try {
+      const timestamp = parseInt(parsed.internal_date, 10);
+      if (!isNaN(timestamp)) {
+        return new Date(timestamp).toISOString();
+      }
+    } catch {
+      // Invalid internalDate
+    }
+  }
+  
+  return null;
 }
 
 /**
@@ -119,13 +151,14 @@ export async function forwardGofoboEmail(
   }
   
   const claimLink = extractGofoboClaimLink(parsed.body || "");
+  const date = extractDate(parsed);
   
   const payload: GofoboForwardPayload = {
     messageId,
     threadId: parsed.thread_id,
     subject: parsed.subject || "",
     from: parsed.from || "",
-    date: undefined, // Could be extracted from headers if needed
+    date,
     snippet: parsed.snippet,
     claimLink,
   };

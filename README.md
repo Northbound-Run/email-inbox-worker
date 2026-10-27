@@ -149,12 +149,13 @@ On match, the Worker immediately POSTs JSON to `MOVIES_WEBHOOK_URL` with header 
   "threadId": "thread-id",
   "subject": "Sign Up for Passes for Gladiator II",
   "from": "no-reply@gofobo.com",
-  "date": null,
+  "date": "2026-10-27T19:30:00.000Z",
   "snippet": "...",
   "claimLink": "https://gofobo.com/claim/abc123"
 }
 ```
 
+- `date` is extracted from the email's Date header (RFC 2822), falling back to Gmail's `internalDate` timestamp, formatted as ISO 8601. `null` if both are unavailable.
 - `claimLink` is the first `gofobo.com` URL found in the message body (text or HTML, decoded), or `null` if none.
 - Dedupe: the same `messageId` is never forwarded twice (KV with 30-day TTL).
 - Failures are logged but do **not** block normal labeling.
