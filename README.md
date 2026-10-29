@@ -79,9 +79,12 @@ The Worker applies **managed labels** to categorize incoming mail:
 **Enforced rule:** Any message modified by the Worker ends up with **at most one** managed label.
 
 - When applying a new managed label, all other managed labels are removed in the same Gmail API call
+- **Thread-level cleanup:** Since Gmail shows labels as the union of all messages in a thread, the Worker also removes other managed labels from the entire thread
 - Non-managed labels (user labels, Gmail system labels like `INBOX`/`UNREAD`/`STARRED`) are preserved
 - Labels are created lazily on first use per account
 - Multi-account: label IDs are resolved independently per mailbox email
+
+**Admin cleanup endpoint:** `POST /admin/cleanup-threads?account=work|personal` scans existing threads with multiple managed labels and cleans them up (requires `ALLOW_DEBUG=1`). See `docs/LABEL_CLEANUP.md` for details.
 
 See `src/lib/labels.ts` for the centralized enforcement logic.
 
@@ -122,7 +125,8 @@ Messages not matching any rule go through LLM classification (OpenRouter Jev Dec
 - [x] Pub/Sub OIDC + history drain + `/watch`  
 - [x] CLI installer (`npm run setup`) with workers.dev URL auto-detect  
 - [x] Label apply / archive on Worker  
-- [x] Single managed label enforcement  
+- [x] Single managed label enforcement (message + thread level)  
+- [x] Admin cleanup endpoint for existing multi-labeled threads  
 - [x] Watch Cron renew (`0 14 * * *` UTC + `POST /cron/renew-watches`)  
 - [x] Multi-account (per-email KV + migrate legacy oauth:* keys)  
 - [x] Gofobo screening pass fast-path forwarding (optional)  

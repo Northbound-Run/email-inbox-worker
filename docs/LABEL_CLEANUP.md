@@ -4,7 +4,9 @@
 
 Prior to the single-label enforcement update, messages could accumulate multiple managed labels (e.g., both "1: To Respond" and "2: FYI"). The Worker now enforces that any message it touches has **at most one** managed label.
 
-This document describes how to perform a one-off cleanup of existing multi-labeled messages.
+**Thread-level enforcement:** Since Gmail shows labels at the thread level as the union of all messages' labels, the Worker also cleans up the entire thread when processing a message. This ensures that the thread only shows one managed label in the Gmail UI.
+
+This document describes how to perform a one-off cleanup of existing multi-labeled threads.
 
 ## Managed Labels
 
@@ -17,16 +19,59 @@ The system manages these labels:
 - `5: Meeting Update`
 - `8: Marketing`
 
-## Strategy
+## Admin Cleanup Endpoint
 
-A one-off cleanup script should:
+The easiest way to clean up existing multi-labeled threads is to use the built-in admin endpoint:
 
-1. **List all managed labels** and resolve their IDs for each account
-2. **Search for messages** with multiple managed labels using Gmail API
-3. **Apply a resolution policy** to determine which label to keep
-4. **Batch update** messages to enforce single-label state
+```bash
+# Clean up the work account
+curl -X POST "https://your-worker.workers.dev/admin/cleanup-threads?account=work&maxThreads=100" \
+  -H "Content-Type: application/json"
 
-## Implementation Approach
+# Clean up the personal account
+curl -X POST "https://your-worker.workers.dev/admin/cleanup-threads?account=personal&maxThreads=100" \
+  -H "Content-Type: application/json"
+```
+
+**Requirements:**
+- Must set `ALLOW_DEBUG=1` environment variable (same gate as `/debug` routes)
+- Specify `account=work` or `account=personal` (or a specific email address)
+
+**Parameters:**
+- `account` (required): `work`, `personal`, or a specific email address
+- `pageSize` (optional): Messages per page, max 100, default 50
+- `maxThreads` (optional): Max threads to scan, max 500, default 100
+
+**Response:**
+```json
+{
+  "ok": true,
+  "account": "matt@northbound.run",
+  "scannedThreads": 47,
+  "threadsWithMultipleLabels": 3,
+  "cleanedThreads": 3,
+  "threads": [
+    {
+      "threadId": "1a1410a47c724a08",
+      "kept": "1: To Respond",
+      "removed": ["2: FYI"]
+    }
+  ]
+}
+```
+
+**How it works:**
+1. Scans threads for messages with managed labels
+2. Identifies threads where multiple managed labels exist across messages
+3. Keeps the label on the newest labeled message in each thread
+4. Removes all other managed labels thread-wide using `threads.modify`
+5. Idempotent: safe to run multiple times
+
+**CPU limits:** The endpoint is paginated to stay within Worker CPU limits. For large mailboxes, call it multiple times with increasing `maxThreads` until `threadsWithMultipleLabels` returns 0.
+
+## Manual Implementation Approach
+
+If you prefer a custom script instead of the admin endpoint:
 
 ### 1. Search Query
 

@@ -92,3 +92,34 @@ export function enforceOneManagedLabel(
     removeLabelIds: Array.from(removeLabelIds),
   };
 }
+
+/**
+ * Compute thread-level managed labels to remove.
+ * 
+ * Given the label we're keeping (on the newest message) and all messages in the thread,
+ * returns the set of managed label IDs to remove thread-wide.
+ * 
+ * @param keepLabelId - The managed label ID we're keeping (on the newest message)
+ * @param threadMessages - All messages in the thread with their label IDs
+ * @param managedLabelIds - Map of managed label name → ID
+ * @returns Array of managed label IDs to remove from the thread
+ */
+export function computeThreadLabelsToRemove(
+  keepLabelId: string,
+  threadMessages: Array<{ id: string; labelIds: string[] }>,
+  managedLabelIds: Map<string, string>,
+): string[] {
+  const allManagedIds = new Set(managedLabelIds.values());
+  const labelsToRemove = new Set<string>();
+  
+  // Find all managed labels across all messages in the thread
+  for (const msg of threadMessages) {
+    for (const labelId of msg.labelIds) {
+      if (allManagedIds.has(labelId) && labelId !== keepLabelId) {
+        labelsToRemove.add(labelId);
+      }
+    }
+  }
+  
+  return Array.from(labelsToRemove);
+}

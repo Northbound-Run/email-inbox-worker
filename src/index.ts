@@ -36,7 +36,9 @@ import {
   getAccessToken,
   getMessage,
   getProfile,
+  getThreadMessages,
   modifyMessageLabels,
+  modifyThreadLabels,
   parseMessage,
   populateLabelCache,
   recipientRole,
@@ -49,6 +51,7 @@ import {
   skipInbox,
   resolveManagedLabelIds,
   enforceOneManagedLabel,
+  computeThreadLabelsToRemove,
 } from "./lib/labels";
 import {
   buildAuthUrl,
@@ -548,6 +551,24 @@ async function processInboxMessage(
     // Remove all other managed labels in the same call.
     await modifyMessageLabels(accessToken, messageId, addLabelIds, removeLabelIds);
     
+    // Thread-level cleanup: remove all other managed labels from the entire thread.
+    // Gmail shows labels at the thread level as the union of all messages' labels,
+    // so we need to ensure no other managed labels exist on any message in this thread.
+    try {
+      const threadMessages = await getThreadMessages(accessToken, parsed.thread_id || "");
+      const threadLabelsToRemove = computeThreadLabelsToRemove(
+        labelId,
+        threadMessages,
+        managedLabelIds,
+      );
+      if (threadLabelsToRemove.length > 0) {
+        await modifyThreadLabels(accessToken, parsed.thread_id || "", [], threadLabelsToRemove);
+      }
+    } catch (threadErr) {
+      // Log but don't fail the whole operation if thread cleanup fails
+      console.error(`Thread cleanup failed for ${parsed.thread_id}:`, threadErr);
+    }
+    
     labelsApplied = {
       add: label,
       removeInbox: removeLabelIds.includes("INBOX"),
@@ -1037,6 +1058,190 @@ async function handleClassifyCompare(request: Request, env: Env): Promise<Respon
   });
 }
 
+/**
+ * Admin endpoint: Scan threads with multiple managed labels and clean them up.
+ * Keeps the label on the newest labeled message, removes others thread-wide.
+ * 
+ * POST /admin/cleanup-threads?account=work|personal&pageSize=50&maxThreads=100
+ */
+async function handleCleanupThreads(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const accountParam = url.searchParams.get("account");
+  const pageSizeParam = url.searchParams.get("pageSize");
+  const maxThreadsParam = url.searchParams.get("maxThreads");
+  
+  const pageSize = pageSizeParam ? Math.min(parseInt(pageSizeParam, 10), 100) : 50;
+  const maxThreads = maxThreadsParam ? Math.min(parseInt(maxThreadsParam, 10), 500) : 100;
+  
+  // Resolve mailbox email
+  let email: string | null = null;
+  if (accountParam === "work" && env.WORK_EMAIL?.trim()) {
+    email = env.WORK_EMAIL.trim();
+  } else if (accountParam === "personal" && env.OWNER_EMAIL?.trim()) {
+    email = env.OWNER_EMAIL.trim();
+  } else if (accountParam) {
+    email = accountParam;
+  }
+  
+  if (!email) {
+    return json({ 
+      ok: false, 
+      error: "Missing account parameter (use ?account=work or ?account=personal)" 
+    }, 400);
+  }
+  
+  try {
+    const gmail = await gmailEnvOrThrow(env, email);
+    const accessToken = await getAccessToken(gmail);
+    const cache = new Map<string, string>();
+    await populateLabelCache(accessToken, cache);
+    const managedLabelIds = resolveManagedLabelIds(cache);
+    
+    if (managedLabelIds.size === 0) {
+      return json({ 
+        ok: false, 
+        error: "No managed labels found for this account" 
+      }, 404);
+    }
+    
+    // Build a search query for threads with any managed label
+    const managedNames = Array.from(managedLabelIds.keys());
+    const allManagedIds = Array.from(managedLabelIds.values());
+    
+    // Scan threads by searching for messages with any managed label
+    // We'll fetch threads and check for multi-label conflicts
+    const threadsToClean = new Map<string, {
+      messages: Array<{ id: string; labelIds: string[]; internalDate: string }>;
+      keepLabelId: string;
+      removeLabelIds: string[];
+    }>();
+    
+    let scannedThreads = 0;
+    let pageToken: string | undefined;
+    
+    // Search for messages with the first managed label to get a starting set
+    const firstLabelName = managedNames[0];
+    const searchQuery = `label:"${firstLabelName}"`;
+    
+    while (scannedThreads < maxThreads) {
+      const params = new URLSearchParams({
+        q: searchQuery,
+        maxResults: String(pageSize),
+      });
+      if (pageToken) params.set("pageToken", pageToken);
+      
+      const searchRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`,
+        { headers: { authorization: `Bearer ${accessToken}` } }
+      );
+      
+      if (!searchRes.ok) {
+        throw new Error(`Search failed: ${searchRes.status} ${await searchRes.text()}`);
+      }
+      
+      const searchData = (await searchRes.json()) as {
+        messages?: Array<{ id?: string; threadId?: string }>;
+        nextPageToken?: string;
+      };
+      
+      const messages = searchData.messages || [];
+      if (messages.length === 0) break;
+      
+      // Get unique thread IDs
+      const threadIds = [...new Set(messages.map(m => m.threadId).filter(Boolean))] as string[];
+      
+      for (const threadId of threadIds) {
+        if (threadsToClean.has(threadId)) continue; // Already analyzed
+        
+        scannedThreads++;
+        if (scannedThreads > maxThreads) break;
+        
+        // Get all messages in this thread
+        const threadMessages = await getThreadMessages(accessToken, threadId);
+        
+        // Find all managed labels across the thread
+        const labelsInThread = new Set<string>();
+        for (const msg of threadMessages) {
+          for (const labelId of msg.labelIds) {
+            if (allManagedIds.includes(labelId)) {
+              labelsInThread.add(labelId);
+            }
+          }
+        }
+        
+        // Only process if thread has multiple managed labels
+        if (labelsInThread.size <= 1) continue;
+        
+        // Find the newest message with a managed label
+        let newestMsg: typeof threadMessages[0] | null = null;
+        let newestLabelId: string | null = null;
+        
+        for (const msg of threadMessages) {
+          const managedLabelsOnMsg = msg.labelIds.filter(id => allManagedIds.includes(id));
+          if (managedLabelsOnMsg.length > 0) {
+            if (!newestMsg || parseInt(msg.internalDate, 10) > parseInt(newestMsg.internalDate, 10)) {
+              newestMsg = msg;
+              newestLabelId = managedLabelsOnMsg[0]; // Keep the first one if multiple
+            }
+          }
+        }
+        
+        if (!newestLabelId) continue;
+        
+        // Compute labels to remove (all managed labels except the one we're keeping)
+        const removeLabelIds = Array.from(labelsInThread).filter(id => id !== newestLabelId);
+        
+        if (removeLabelIds.length > 0) {
+          threadsToClean.set(threadId, {
+            messages: threadMessages,
+            keepLabelId: newestLabelId,
+            removeLabelIds,
+          });
+        }
+      }
+      
+      pageToken = searchData.nextPageToken;
+      if (!pageToken) break;
+    }
+    
+    // Now clean up the threads
+    const cleaned: Array<{ threadId: string; kept: string; removed: string[] }> = [];
+    
+    for (const [threadId, { keepLabelId, removeLabelIds }] of threadsToClean.entries()) {
+      await modifyThreadLabels(accessToken, threadId, [], removeLabelIds);
+      
+      // Find the label name for reporting
+      let keptName = "";
+      let removedNames: string[] = [];
+      
+      for (const [name, id] of managedLabelIds.entries()) {
+        if (id === keepLabelId) keptName = name;
+        if (removeLabelIds.includes(id)) removedNames.push(name);
+      }
+      
+      cleaned.push({
+        threadId,
+        kept: keptName,
+        removed: removedNames,
+      });
+    }
+    
+    return json({
+      ok: true,
+      account: email,
+      scannedThreads,
+      threadsWithMultipleLabels: threadsToClean.size,
+      cleanedThreads: cleaned.length,
+      threads: cleaned,
+    });
+    
+  } catch (err) {
+    return json({ 
+      ok: false, 
+      error: err instanceof Error ? err.message : String(err) 
+    }, 500);
+  }
+}
 
 /** Catch-up drain for every registered mailbox (missed Pub/Sub / partial drains). */
 async function reconcileAllMailboxes(env: Env): Promise<{
@@ -1172,6 +1377,20 @@ export default {
       } catch (err) {
         return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
       }
+    }
+
+    if (pathname.startsWith("/admin/")) {
+      if (!debugEnabled(env)) {
+        return json({ ok: false, error: "admin disabled (set ALLOW_DEBUG=1)" }, 404);
+      }
+      if (request.method === "POST" && pathname === "/admin/cleanup-threads") {
+        try {
+          return await handleCleanupThreads(request, env);
+        } catch (err) {
+          return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+      }
+      return json({ ok: false, error: "not found" }, 404);
     }
 
     if (pathname.startsWith("/debug/")) {
