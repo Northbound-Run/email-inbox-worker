@@ -373,7 +373,7 @@ export async function probeClassifierModel(
 export async function classifyMail(
   parsed: ParsedMail,
   env: ClassifyEnv,
-  pre: "Marketing" | "Notification" | null,
+  pre: "Marketing" | "Notification" | "FYI" | null,
   ownerEmail = "",
 ): Promise<ClassifyResult> {
   if (pre) {
