@@ -14,6 +14,9 @@ export type ParsedMail = {
 
 const NOREPLY_RE = /no[-_.]?reply|donotreply|do-not-reply|mailer-daemon/i;
 
+/** Gemini automated meeting notes sender (always FYI, never To Respond). */
+const GEMINI_NOTES_FROM = "gemini-notes@google.com";
+
 /** Automated transactional / alert senders that should not wake To Respond. */
 const AUTOMATED_FROM_RE =
   /(?:^|[\s<])(?:notifications?|alerts?|orders?|shipping|ship-?confirm|receipts?|updates?|status|automated|bounces?)@/i;
@@ -73,6 +76,15 @@ export function looksLikeTransactionalCta(parsed: ParsedMail): boolean {
 }
 
 /**
+ * Gemini automated meeting notes (e.g. subject 'Notes: "Igloo / Northbound" Oct 29, 2026').
+ * Always FYI, never To Respond, never triggers draft webhook.
+ */
+export function isGeminiMeetingNotes(from: string | undefined): boolean {
+  const frm = (from || "").toLowerCase();
+  return frm.includes(GEMINI_NOTES_FROM.toLowerCase());
+}
+
+/**
  * Broadcast Terms-of-Service / privacy / legal *product* updates
  * (e.g. contact@vast.ai "Terms Updated"). Must NOT match human deal threads
  * like "Re: Updated Terms & Conditions".
@@ -126,7 +138,9 @@ export function looksLikePolicyBroadcast(parsed: ParsedMail): boolean {
 }
 
 /** Return a category if a rule matches, else null → LLM / ambiguous path. */
-export function preClassify(parsed: ParsedMail): "Marketing" | "Notification" | null {
+export function preClassify(parsed: ParsedMail): "Marketing" | "Notification" | "FYI" | null {
+  // Gemini meeting notes: always FYI, never To Respond (checked before other rules)
+  if (isGeminiMeetingNotes(parsed.from)) return "FYI";
   if (isBulkMarketing(parsed)) return "Marketing";
   if (isAutomatedSender(parsed.from)) return "Notification";
   // Strong transactional CTA without noreply From (hello@/support@ brands).

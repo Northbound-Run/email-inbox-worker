@@ -85,6 +85,36 @@ The Worker applies **managed labels** to categorize incoming mail:
 
 See `src/lib/labels.ts` for the centralized enforcement logic.
 
+## Pre-Classification Rules
+
+Before LLM classification, the Worker applies **deterministic fast-path rules** (`src/lib/preclassify.ts`):
+
+1. **Gemini Meeting Notes** → `FYI`
+   - From: `gemini-notes@google.com` (e.g. subject: `Notes: "Igloo / Northbound" Oct 29, 2026`)
+   - Never classified as `To Respond`, never triggers draft webhook
+   - Applies to both work and personal accounts
+
+2. **Bulk Marketing** → `Marketing`
+   - One-click unsubscribe header present, OR
+   - List-Unsubscribe header + `Precedence: bulk` or `Precedence: junk`
+
+3. **Automated Senders** → `Notification`
+   - From matches: `noreply@`, `no-reply@`, `notifications@`, `alerts@`, `orders@`, etc.
+   - From domain matches: `@notify.`, `@notifications.`, `@alerts.`, etc.
+
+4. **Transactional CTAs** → `Notification`
+   - Strong shipping/renewal CTAs (e.g. "ship your order", "renewal approved")
+   - Soft CTAs (e.g. "click here", "manage preferences") from automated senders
+
+5. **Policy Broadcasts** → `Notification`
+   - Terms of Service / Privacy Policy update announcements
+   - Must NOT be reply/forward threads
+
+6. **CC Recipients** → `FYI`
+   - Owner appears only in Cc (not To) → classified as `FYI` without LLM
+
+Messages not matching any rule go through LLM classification (OpenRouter Jev Decisions).
+
 ## Status
 
 - [x] Draft wake + OpenRouter Jev triage + CC hard gate  
