@@ -84,7 +84,7 @@ The Worker applies **managed labels** to categorize incoming mail:
 - Labels are created lazily on first use per account
 - Multi-account: label IDs are resolved independently per mailbox email
 
-**Admin cleanup endpoint:** `POST /admin/cleanup-threads?account=work|personal` scans existing threads with multiple managed labels and cleans them up (requires `ALLOW_DEBUG=1`). See `docs/LABEL_CLEANUP.md` for details.
+**Admin cleanup endpoint:** `POST /admin/cleanup-threads?account=work|personal&pageToken=...` scans existing threads with multiple managed labels and cleans them up. Iterates over ALL managed label IDs using `labelIds` (not search queries), deduplicates threads across labels, and returns `nextPageToken` for pagination. Returns 400 if `WORK_EMAIL`/`OWNER_EMAIL` are unset when using `account=work`/`personal`. Requires `ALLOW_DEBUG=1`. See `docs/LABEL_CLEANUP.md` for details.
 
 See `src/lib/labels.ts` for the centralized enforcement logic.
 
