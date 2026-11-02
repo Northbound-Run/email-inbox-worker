@@ -1062,22 +1062,37 @@ async function handleClassifyCompare(request: Request, env: Env): Promise<Respon
  * Admin endpoint: Scan threads with multiple managed labels and clean them up.
  * Keeps the label on the newest labeled message, removes others thread-wide.
  * 
- * POST /admin/cleanup-threads?account=work|personal&pageSize=50&maxThreads=100
+ * POST /admin/cleanup-threads?account=work|personal&pageSize=50&maxThreads=100&pageToken=...
+ * 
+ * Response includes nextPageToken when more results exist; call again with pageToken to continue.
  */
 async function handleCleanupThreads(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const accountParam = url.searchParams.get("account");
   const pageSizeParam = url.searchParams.get("pageSize");
   const maxThreadsParam = url.searchParams.get("maxThreads");
+  const resumePageToken = url.searchParams.get("pageToken");
   
   const pageSize = pageSizeParam ? Math.min(parseInt(pageSizeParam, 10), 100) : 50;
   const maxThreads = maxThreadsParam ? Math.min(parseInt(maxThreadsParam, 10), 500) : 100;
   
-  // Resolve mailbox email
+  // Validate account parameter and resolve mailbox email
   let email: string | null = null;
-  if (accountParam === "work" && env.WORK_EMAIL?.trim()) {
+  if (accountParam === "work") {
+    if (!env.WORK_EMAIL?.trim()) {
+      return json({ 
+        ok: false, 
+        error: "WORK_EMAIL not configured (use ?account=personal or set WORK_EMAIL)" 
+      }, 400);
+    }
     email = env.WORK_EMAIL.trim();
-  } else if (accountParam === "personal" && env.OWNER_EMAIL?.trim()) {
+  } else if (accountParam === "personal") {
+    if (!env.OWNER_EMAIL?.trim()) {
+      return json({ 
+        ok: false, 
+        error: "OWNER_EMAIL not configured (use ?account=work or set OWNER_EMAIL)" 
+      }, 400);
+    }
     email = env.OWNER_EMAIL.trim();
   } else if (accountParam) {
     email = accountParam;
@@ -1104,12 +1119,9 @@ async function handleCleanupThreads(request: Request, env: Env): Promise<Respons
       }, 404);
     }
     
-    // Build a search query for threads with any managed label
-    const managedNames = Array.from(managedLabelIds.keys());
     const allManagedIds = Array.from(managedLabelIds.values());
     
-    // Scan threads by searching for messages with any managed label
-    // We'll fetch threads and check for multi-label conflicts
+    // Scan threads by iterating over ALL managed labels using labelIds parameter
     const threadsToClean = new Map<string, {
       messages: Array<{ id: string; labelIds: string[]; internalDate: string }>;
       keepLabelId: string;
@@ -1117,91 +1129,121 @@ async function handleCleanupThreads(request: Request, env: Env): Promise<Respons
     }>();
     
     let scannedThreads = 0;
-    let pageToken: string | undefined;
+    let lastPageToken: string | undefined;
+    let currentLabelIndex = 0;
+    let pageTokenPerLabel: Map<number, string | undefined> = new Map();
     
-    // Search for messages with the first managed label to get a starting set
-    const firstLabelName = managedNames[0];
-    const searchQuery = `label:"${firstLabelName}"`;
-    
-    while (scannedThreads < maxThreads) {
-      const params = new URLSearchParams({
-        q: searchQuery,
-        maxResults: String(pageSize),
-      });
-      if (pageToken) params.set("pageToken", pageToken);
-      
-      const searchRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`,
-        { headers: { authorization: `Bearer ${accessToken}` } }
-      );
-      
-      if (!searchRes.ok) {
-        throw new Error(`Search failed: ${searchRes.status} ${await searchRes.text()}`);
+    // Parse resume state from pageToken if provided
+    if (resumePageToken) {
+      try {
+        const decoded = JSON.parse(Buffer.from(resumePageToken, "base64url").toString("utf-8"));
+        currentLabelIndex = decoded.labelIndex || 0;
+        pageTokenPerLabel = new Map(Object.entries(decoded.pageTokens || {}).map(([k, v]) => [parseInt(k, 10), v as string]));
+        scannedThreads = decoded.scannedThreads || 0;
+      } catch {
+        // Invalid token, start fresh
       }
+    }
+    
+    // Iterate over each managed label ID
+    for (let labelIdx = currentLabelIndex; labelIdx < allManagedIds.length; labelIdx++) {
+      const labelId = allManagedIds[labelIdx];
+      let labelPageToken = pageTokenPerLabel.get(labelIdx);
       
-      const searchData = (await searchRes.json()) as {
-        messages?: Array<{ id?: string; threadId?: string }>;
-        nextPageToken?: string;
-      };
-      
-      const messages = searchData.messages || [];
-      if (messages.length === 0) break;
-      
-      // Get unique thread IDs
-      const threadIds = [...new Set(messages.map(m => m.threadId).filter(Boolean))] as string[];
-      
-      for (const threadId of threadIds) {
-        if (threadsToClean.has(threadId)) continue; // Already analyzed
+      while (scannedThreads < maxThreads) {
+        const params = new URLSearchParams({
+          labelIds: labelId,
+          maxResults: String(pageSize),
+        });
+        if (labelPageToken) params.set("pageToken", labelPageToken);
         
-        scannedThreads++;
-        if (scannedThreads > maxThreads) break;
+        const searchRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`,
+          { headers: { authorization: `Bearer ${accessToken}` } }
+        );
         
-        // Get all messages in this thread
-        const threadMessages = await getThreadMessages(accessToken, threadId);
+        if (!searchRes.ok) {
+          throw new Error(`Search failed for labelId ${labelId}: ${searchRes.status} ${await searchRes.text()}`);
+        }
         
-        // Find all managed labels across the thread
-        const labelsInThread = new Set<string>();
-        for (const msg of threadMessages) {
-          for (const labelId of msg.labelIds) {
-            if (allManagedIds.includes(labelId)) {
-              labelsInThread.add(labelId);
+        const searchData = (await searchRes.json()) as {
+          messages?: Array<{ id?: string; threadId?: string }>;
+          nextPageToken?: string;
+        };
+        
+        const messages = searchData.messages || [];
+        if (messages.length === 0) break;
+        
+        // Get unique thread IDs and dedupe across labels
+        const threadIds = [...new Set(messages.map(m => m.threadId).filter(Boolean))] as string[];
+        
+        for (const threadId of threadIds) {
+          if (threadsToClean.has(threadId)) continue; // Already analyzed
+          
+          scannedThreads++;
+          if (scannedThreads > maxThreads) {
+            // Save pagination state for resume
+            pageTokenPerLabel.set(labelIdx, searchData.nextPageToken);
+            const resumeState = {
+              labelIndex: labelIdx,
+              pageTokens: Object.fromEntries(pageTokenPerLabel.entries()),
+              scannedThreads,
+            };
+            lastPageToken = Buffer.from(JSON.stringify(resumeState), "utf-8").toString("base64url");
+            break;
+          }
+          
+          // Get all messages in this thread
+          const threadMessages = await getThreadMessages(accessToken, threadId);
+          
+          // Find all managed labels across the thread
+          const labelsInThread = new Set<string>();
+          for (const msg of threadMessages) {
+            for (const msgLabelId of msg.labelIds) {
+              if (allManagedIds.includes(msgLabelId)) {
+                labelsInThread.add(msgLabelId);
+              }
             }
+          }
+          
+          // Only process if thread has multiple managed labels
+          if (labelsInThread.size <= 1) continue;
+          
+          // Find the newest message with a managed label
+          let newestMsg: typeof threadMessages[0] | null = null;
+          let newestLabelId: string | null = null;
+          
+          for (const msg of threadMessages) {
+            const managedLabelsOnMsg = msg.labelIds.filter(id => allManagedIds.includes(id));
+            if (managedLabelsOnMsg.length > 0) {
+              if (!newestMsg || parseInt(msg.internalDate, 10) > parseInt(newestMsg.internalDate, 10)) {
+                newestMsg = msg;
+                newestLabelId = managedLabelsOnMsg[0]; // Keep the first one if multiple
+              }
+            }
+          }
+          
+          if (!newestLabelId) continue;
+          
+          // Compute labels to remove (all managed labels except the one we're keeping)
+          const removeLabelIds = Array.from(labelsInThread).filter(id => id !== newestLabelId);
+          
+          if (removeLabelIds.length > 0) {
+            threadsToClean.set(threadId, {
+              messages: threadMessages,
+              keepLabelId: newestLabelId,
+              removeLabelIds,
+            });
           }
         }
         
-        // Only process if thread has multiple managed labels
-        if (labelsInThread.size <= 1) continue;
+        if (scannedThreads >= maxThreads) break;
         
-        // Find the newest message with a managed label
-        let newestMsg: typeof threadMessages[0] | null = null;
-        let newestLabelId: string | null = null;
-        
-        for (const msg of threadMessages) {
-          const managedLabelsOnMsg = msg.labelIds.filter(id => allManagedIds.includes(id));
-          if (managedLabelsOnMsg.length > 0) {
-            if (!newestMsg || parseInt(msg.internalDate, 10) > parseInt(newestMsg.internalDate, 10)) {
-              newestMsg = msg;
-              newestLabelId = managedLabelsOnMsg[0]; // Keep the first one if multiple
-            }
-          }
-        }
-        
-        if (!newestLabelId) continue;
-        
-        // Compute labels to remove (all managed labels except the one we're keeping)
-        const removeLabelIds = Array.from(labelsInThread).filter(id => id !== newestLabelId);
-        
-        if (removeLabelIds.length > 0) {
-          threadsToClean.set(threadId, {
-            messages: threadMessages,
-            keepLabelId: newestLabelId,
-            removeLabelIds,
-          });
-        }
+        labelPageToken = searchData.nextPageToken;
+        if (!labelPageToken) break;
       }
       
-      pageToken = searchData.nextPageToken;
-      if (!pageToken) break;
+      if (scannedThreads >= maxThreads) break;
     }
     
     // Now clean up the threads
@@ -1233,6 +1275,8 @@ async function handleCleanupThreads(request: Request, env: Env): Promise<Respons
       threadsWithMultipleLabels: threadsToClean.size,
       cleanedThreads: cleaned.length,
       threads: cleaned,
+      done: !lastPageToken,
+      nextPageToken: lastPageToken,
     });
     
   } catch (err) {

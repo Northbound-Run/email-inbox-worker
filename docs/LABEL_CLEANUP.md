@@ -31,16 +31,22 @@ curl -X POST "https://your-worker.workers.dev/admin/cleanup-threads?account=work
 # Clean up the personal account
 curl -X POST "https://your-worker.workers.dev/admin/cleanup-threads?account=personal&maxThreads=100" \
   -H "Content-Type: application/json"
+
+# Continue from a previous incomplete run using the returned nextPageToken
+curl -X POST "https://your-worker.workers.dev/admin/cleanup-threads?account=personal&pageToken=eyJsYWJlbEluZGV4IjoxfQ" \
+  -H "Content-Type: application/json"
 ```
 
 **Requirements:**
 - Must set `ALLOW_DEBUG=1` environment variable (same gate as `/debug` routes)
 - Specify `account=work` or `account=personal` (or a specific email address)
+- Returns a 400 error if `WORK_EMAIL` is not set when using `account=work`, or `OWNER_EMAIL` when using `account=personal`
 
 **Parameters:**
 - `account` (required): `work`, `personal`, or a specific email address
 - `pageSize` (optional): Messages per page, max 100, default 50
-- `maxThreads` (optional): Max threads to scan, max 500, default 100
+- `maxThreads` (optional): Max threads to scan per call, max 500, default 100
+- `pageToken` (optional): Resume token from a previous response to continue scanning
 
 **Response:**
 ```json
@@ -56,18 +62,48 @@ curl -X POST "https://your-worker.workers.dev/admin/cleanup-threads?account=pers
       "kept": "1: To Respond",
       "removed": ["2: FYI"]
     }
-  ]
+  ],
+  "done": true,
+  "nextPageToken": null
 }
 ```
 
-**How it works:**
-1. Scans threads for messages with managed labels
-2. Identifies threads where multiple managed labels exist across messages
-3. Keeps the label on the newest labeled message in each thread
-4. Removes all other managed labels thread-wide using `threads.modify`
-5. Idempotent: safe to run multiple times
+**Response fields:**
+- `done`: `true` if all threads have been scanned, `false` if more remain
+- `nextPageToken`: Present when `done=false`; pass it back as `?pageToken=...` to continue scanning
+- `scannedThreads`: Total threads examined in this call (deduped across all managed labels)
+- `threadsWithMultipleLabels`: How many had conflicts
+- `cleanedThreads`: How many were actually modified
 
-**CPU limits:** The endpoint is paginated to stay within Worker CPU limits. For large mailboxes, call it multiple times with increasing `maxThreads` until `threadsWithMultipleLabels` returns 0.
+**How it works:**
+1. Iterates over ALL managed label IDs (not just the first one) using the `labelIds` query parameter
+2. Scans messages with each managed label, deduplicating threads across labels
+3. Identifies threads where multiple managed labels exist across messages
+4. Keeps the label on the newest labeled message in each thread (by `internalDate`)
+5. Removes all other managed labels thread-wide using `threads.modify`
+6. Returns `nextPageToken` when `maxThreads` is reached mid-scan, allowing pagination
+7. Idempotent: safe to run multiple times
+
+**Pagination:** When you hit the `maxThreads` limit mid-scan, the response includes `nextPageToken` and `done: false`. Call again with `?pageToken=<token>` to continue from where you left off. The token encodes which label you were scanning and the Gmail API page token, so you can resume across Worker invocations without re-scanning threads.
+
+**CPU limits:** The endpoint is paginated to stay within Worker CPU limits. For large mailboxes:
+1. Call with `maxThreads=100` (or higher)
+2. If `done: false`, call again with the returned `nextPageToken`
+3. Repeat until `done: true`
+
+**Example full scan:**
+```bash
+# First call
+RESPONSE=$(curl -X POST "https://your-worker.workers.dev/admin/cleanup-threads?account=personal&maxThreads=100")
+TOKEN=$(echo $RESPONSE | jq -r '.nextPageToken')
+
+# Continue while nextPageToken is present
+while [ "$TOKEN" != "null" ]; do
+  RESPONSE=$(curl -X POST "https://your-worker.workers.dev/admin/cleanup-threads?account=personal&pageToken=$TOKEN")
+  TOKEN=$(echo $RESPONSE | jq -r '.nextPageToken')
+  echo "Cleaned $(echo $RESPONSE | jq -r '.cleanedThreads') threads"
+done
+```
 
 ## Manual Implementation Approach
 
@@ -75,13 +111,28 @@ If you prefer a custom script instead of the admin endpoint:
 
 ### 1. Search Query
 
-Use Gmail's `users.messages.list` with a query to find messages with multiple managed labels:
+Use Gmail's `users.messages.list` with the `labelIds` parameter (NOT the `q` search query) to find messages with managed labels:
 
-```
-label:"1: To Respond" AND (label:"2: FYI" OR label:"3: Comment" OR label:"4: Notification" OR label:"5: Meeting Update" OR label:"8: Marketing")
+```typescript
+// For each managed label ID
+const params = new URLSearchParams({
+  labelIds: labelId,  // Use label ID, not name
+  maxResults: "100",
+});
+
+const response = await fetch(
+  `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`,
+  { headers: { authorization: `Bearer ${accessToken}` } }
+);
 ```
 
-You'll need to construct similar queries for each combination, or fetch all messages with any managed label and filter programmatically.
+**Why labelIds instead of q?**
+- Label names may contain spaces or special characters (e.g., "1: To Respond")
+- Nested labels use "/" separators in display names (e.g., "Parent/To Respond")
+- Gmail's search syntax with `q=label:"name"` can fail on these patterns
+- Using `labelIds` is more reliable and avoids search syntax issues
+
+**You must iterate over ALL managed label IDs**, not just the first one, and deduplicate threads across labels to get accurate results.
 
 ### 2. Resolution Policy
 
@@ -140,90 +191,103 @@ async function cleanupMultiLabeled(accessToken: string) {
     "8: Marketing",
   ];
   
-  // 3. For each managed label, search messages
-  const affectedMessages = new Map<string, string[]>(); // messageId → labelIds
+  // 3. For each managed label, search messages using labelIds parameter
+  const affectedThreads = new Map<string, string[]>(); // threadId → labelIds
+  const seenThreads = new Set<string>();
   
-  for (const labelName of managedNames) {
-    const labelId = managedIds.get(labelName);
-    if (!labelId) continue;
+  const allManagedIds = Array.from(managedIds.values());
+  
+  for (const labelId of allManagedIds) {
+    // Use labelIds parameter, not q search
+    const params = new URLSearchParams({
+      labelIds: labelId,
+      maxResults: "500",
+    });
     
-    // Search: label:<labelName>
     const resp = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=label:${encodeURIComponent(labelName)}&maxResults=500`,
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`,
       { headers: { authorization: `Bearer ${accessToken}` } }
     );
     const data = await resp.json();
     
     for (const msg of data.messages || []) {
-      const fullMsg = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata`,
+      const threadId = msg.threadId;
+      if (seenThreads.has(threadId)) continue; // Dedupe across labels
+      seenThreads.add(threadId);
+      
+      // Get all messages in thread
+      const threadResp = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=metadata`,
         { headers: { authorization: `Bearer ${accessToken}` } }
       );
-      const msgData = await fullMsg.json();
-      const currentLabels = msgData.labelIds || [];
+      const threadData = await threadResp.json();
       
-      // Count how many managed labels this message has
-      const managedOnMsg = currentLabels.filter(id => 
-        Array.from(managedIds.values()).includes(id)
-      );
+      // Find all managed labels across thread
+      const labelsInThread = new Set<string>();
+      for (const threadMsg of threadData.messages || []) {
+        const currentLabels = threadMsg.labelIds || [];
+        for (const labelId of currentLabels) {
+          if (allManagedIds.includes(labelId)) {
+            labelsInThread.add(labelId);
+          }
+        }
+      }
       
-      if (managedOnMsg.length > 1) {
-        affectedMessages.set(msg.id, managedOnMsg);
+      // Only process if thread has multiple managed labels
+      if (labelsInThread.size > 1) {
+        affectedThreads.set(threadId, Array.from(labelsInThread));
       }
     }
   }
   
-  // 4. Resolve which label to keep for each message
-  const batches = new Map<string, string[]>(); // removeLabelIds → messageIds[]
-  
-  for (const [messageId, labelIds] of affectedMessages.entries()) {
-    // Find highest-priority label
-    let keepLabel: string | null = null;
-    for (const labelName of priority) {
-      const labelId = managedIds.get(labelName);
-      if (labelId && labelIds.includes(labelId)) {
-        keepLabel = labelId;
-        break;
+  // 4. For each affected thread, find newest message and determine which label to keep
+  for (const [threadId, labelIds] of affectedThreads.entries()) {
+    const threadResp = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=metadata`,
+      { headers: { authorization: `Bearer ${accessToken}` } }
+    );
+    const threadData = await threadResp.json();
+    
+    // Find newest message with a managed label
+    let newestMsg: any = null;
+    let newestLabelId: string | null = null;
+    
+    for (const msg of threadData.messages || []) {
+      const managedLabelsOnMsg = (msg.labelIds || []).filter((id: string) => 
+        allManagedIds.includes(id)
+      );
+      if (managedLabelsOnMsg.length > 0) {
+        if (!newestMsg || parseInt(msg.internalDate, 10) > parseInt(newestMsg.internalDate, 10)) {
+          newestMsg = msg;
+          newestLabelId = managedLabelsOnMsg[0];
+        }
       }
     }
     
-    // Remove all others
-    const toRemove = labelIds.filter(id => id !== keepLabel);
+    if (!newestLabelId) continue;
+    
+    // Remove all other managed labels from thread
+    const toRemove = labelIds.filter(id => id !== newestLabelId);
     if (toRemove.length === 0) continue;
     
-    const key = toRemove.sort().join(",");
-    if (!batches.has(key)) batches.set(key, []);
-    batches.get(key)!.push(messageId);
-  }
-  
-  // 5. Execute batch updates
-  for (const [removeKey, messageIds] of batches.entries()) {
-    const removeLabelIds = removeKey.split(",");
+    await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}/modify`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          removeLabelIds: toRemove,
+        }),
+      }
+    );
     
-    // Process in chunks of 1000
-    for (let i = 0; i < messageIds.length; i += 1000) {
-      const chunk = messageIds.slice(i, i + 1000);
-      
-      await fetch(
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages/batchModify",
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${accessToken}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            ids: chunk,
-            removeLabelIds,
-          }),
-        }
-      );
-      
-      console.log(`Cleaned ${chunk.length} messages (removed ${removeLabelIds.length} labels)`);
-    }
+    console.log(`Cleaned thread ${threadId}: kept ${newestLabelId}, removed ${toRemove.length} labels`);
   }
   
-  console.log(`Total messages cleaned: ${affectedMessages.size}`);
+  console.log(`Total threads cleaned: ${affectedThreads.size}`);
 }
 ```
 
