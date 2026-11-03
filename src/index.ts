@@ -1136,7 +1136,7 @@ async function handleCleanupThreads(request: Request, env: Env): Promise<Respons
     // Parse resume state from pageToken if provided
     if (resumePageToken) {
       try {
-        const decoded = JSON.parse(Buffer.from(resumePageToken, "base64url").toString("utf-8"));
+        const decoded = JSON.parse(atob(resumePageToken.replace(/-/g, "+").replace(/_/g, "/")));
         currentLabelIndex = decoded.labelIndex || 0;
         pageTokenPerLabel = new Map(Object.entries(decoded.pageTokens || {}).map(([k, v]) => [parseInt(k, 10), v as string]));
         scannedThreads = decoded.scannedThreads || 0;
@@ -1189,7 +1189,7 @@ async function handleCleanupThreads(request: Request, env: Env): Promise<Respons
               pageTokens: Object.fromEntries(pageTokenPerLabel.entries()),
               scannedThreads,
             };
-            lastPageToken = Buffer.from(JSON.stringify(resumeState), "utf-8").toString("base64url");
+            lastPageToken = btoa(JSON.stringify(resumeState)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
             break;
           }
           
